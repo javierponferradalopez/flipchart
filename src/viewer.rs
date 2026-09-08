@@ -4,9 +4,11 @@ use eframe::egui;
 use winit::platform::macos::{ActivationPolicy, EventLoopBuilderExtMacOS};
 
 use crate::mac::bring_the_window_forward;
+mod glass;
 mod raster;
 mod zoom;
 
+use self::glass::{Glass, INK, NIB, Tool};
 use self::raster::{Rasterizer, Rendered, Scale};
 use self::zoom::{MINIMUM_ZOOM, Zoom};
 use crate::wire::{Command, Commands, DeckSnapshot};
@@ -68,9 +70,10 @@ fn working_directory() -> Option<String> {
     Some(path.file_name()?.to_string_lossy().into_owned())
 }
 
-/// A sheet on screen: what the Viewer remembers of it is its drawing and the
+/// A sheet on screen: what the Viewer remembers of it is its drawing, the
 /// **zoom is its own** — the fit its size earns it and the choice the user made
-/// over it, pan included. A replaced View inherits neither.
+/// over it, pan included — and the **glass is its own**: the ink the user
+/// marked it with. A replaced View inherits none of the three.
 struct Sheet {
     number: u64,
     id: String,
@@ -79,6 +82,7 @@ struct Sheet {
     awaited: Option<Scale>,
     zoom: Zoom,
     pan: egui::Vec2,
+    glass: Glass,
 }
 
 impl Sheet {
@@ -91,6 +95,7 @@ impl Sheet {
             awaited: None,
             zoom: Zoom::default(),
             pan: egui::Vec2::ZERO,
+            glass: Glass::default(),
         }
     }
 }
@@ -158,6 +163,7 @@ struct Viewer {
     rasterizer: Rasterizer,
     deck: Deck,
     window: Window,
+    tool: Tool,
     session_over: bool,
 }
 
@@ -169,6 +175,7 @@ impl Viewer {
             rasterizer: Rasterizer::spawn(cc.egui_ctx.clone()),
             deck: Deck::default(),
             window: Window::default(),
+            tool: Tool::default(),
             session_over: false,
         };
         viewer.accept(first);
@@ -233,9 +240,10 @@ impl Viewer {
         Some(texture.clone())
     }
 
-    /// The flipchart's header: the sheet, its name, two arrows and «sheet N of
-    /// M». **No index** — an index is an administration control, and the user
-    /// does not administer: they watch.
+    /// The flipchart's header: the sheet, its name, two arrows, «sheet N of
+    /// M», and the glass's own controls — the hand and the pencil, and the
+    /// undo that takes a stroke back. **No index** — an index is an
+    /// administration control, and the user does not administer: they watch.
     fn header(&mut self, ui: &mut egui::Ui) {
         let sheets = self.deck.sheets.len();
         let cursor = self.deck.cursor;
@@ -254,6 +262,17 @@ impl Viewer {
                 self.deck.forward();
             }
             ui.weak(format!("sheet {} of {sheets}", cursor + 1));
+            ui.selectable_value(&mut self.tool, Tool::Hand, "hand");
+            ui.selectable_value(&mut self.tool, Tool::Pencil, "pencil");
+            let inked = self
+                .deck
+                .showing()
+                .is_some_and(|sheet| !sheet.glass.is_empty());
+            if ui.add_enabled(inked, egui::Button::new("undo")).clicked()
+                && let Some(sheet) = self.deck.showing_mut()
+            {
+                sheet.glass.undo();
+            }
         });
     }
 }
@@ -266,6 +285,13 @@ fn panned_within(pan: egui::Vec2, size: egui::Vec2, room: egui::Vec2) -> egui::V
         pan.x.clamp(-overflow.x, overflow.x),
         pan.y.clamp(-overflow.y, overflow.y),
     )
+}
+
+/// Where on the sheet —in its diagram coordinates— a point of the screen lies.
+/// The same relation the painting walks back the other way, so ink drawn at
+/// one zoom lands on what it was drawn on at every other.
+fn on_the_sheet(screen: egui::Pos2, corner: egui::Pos2, scale: f32) -> egui::Pos2 {
+    egui::pos2((screen.x - corner.x) / scale, (screen.y - corner.y) / scale)
 }
 
 /// The window is born on the first `show` and is **reborn** on the next one
@@ -392,24 +418,48 @@ impl eframe::App for Viewer {
                 zoom.reset();
                 pan = egui::Vec2::ZERO;
             }
-            if response.dragged() {
+            if response.dragged() && self.tool == Tool::Hand {
                 pan += response.drag_delta();
             }
 
-            let size = natural * zoom.of(fitted);
+            let scale = zoom.of(fitted);
+            let size = natural * scale;
             pan = panned_within(pan, size, room);
+            let corner = response.rect.min + (room - size) / 2.0 + pan;
             if let Some(sheet) = self.deck.showing_mut() {
                 sheet.zoom = zoom;
                 sheet.pan = pan;
+                if self.tool == Tool::Pencil {
+                    if response.drag_started()
+                        && let Some(pointer) = response.interact_pointer_pos()
+                    {
+                        sheet.glass.began(on_the_sheet(pointer, corner, scale));
+                    }
+                    if response.dragged()
+                        && let Some(pointer) = response.interact_pointer_pos()
+                    {
+                        sheet.glass.continued(on_the_sheet(pointer, corner, scale));
+                    }
+                }
             }
-            if let Some(texture) = self.request(zoom.of(fitted), ctx.pixels_per_point()) {
-                let corner = response.rect.min + (room - size) / 2.0 + pan;
+            if let Some(texture) = self.request(scale, ctx.pixels_per_point()) {
                 painter.image(
                     texture.id(),
                     egui::Rect::from_min_size(corner, size),
                     egui::Rect::from_min_max(egui::Pos2::ZERO, egui::Pos2::new(1.0, 1.0)),
                     egui::Color32::WHITE,
                 );
+            }
+            if let Some(sheet) = self.deck.showing() {
+                for stroke in sheet.glass.strokes() {
+                    let ink: Vec<egui::Pos2> = stroke
+                        .iter()
+                        .map(|point| corner + point.to_vec2() * scale)
+                        .collect();
+                    if ink.len() > 1 {
+                        painter.add(egui::Shape::line(ink, egui::Stroke::new(NIB, INK)));
+                    }
+                }
             }
         });
     }
@@ -751,5 +801,40 @@ mod tests {
         ));
 
         assert_eq!(deck.sheets[1].zoom.of(0.25), 0.5);
+    }
+
+    #[test]
+    fn a_live_sheet_keeps_its_ink() {
+        let mut deck = three_sheets();
+        deck.sheets[0].glass.began(egui::pos2(10.0, 10.0));
+
+        deck.accept(&flipchart(
+            vec![
+                drawn(1, "current"),
+                drawn(2, "variant A"),
+                drawn(3, "variant B"),
+                drawn(4, "variant C"),
+            ],
+            Some(3),
+        ));
+
+        assert_eq!(deck.sheets[0].glass.strokes().len(), 1);
+    }
+
+    #[test]
+    fn a_replaced_view_arrives_with_clean_glass() {
+        let mut deck = three_sheets();
+        deck.sheets[0].glass.began(egui::pos2(10.0, 10.0));
+
+        deck.accept(&flipchart(
+            vec![
+                drawn(4, "current"),
+                drawn(2, "variant A"),
+                drawn(3, "variant B"),
+            ],
+            Some(0),
+        ));
+
+        assert!(deck.sheets[0].glass.is_empty());
     }
 }
