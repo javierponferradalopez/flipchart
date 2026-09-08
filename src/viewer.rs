@@ -287,8 +287,10 @@ impl Viewer {
                 self.deck.forward();
             }
             ui.weak(format!("sheet {} of {sheets}", cursor + 1));
-            ui.selectable_value(&mut self.tool, Tool::Hand, "hand");
-            ui.selectable_value(&mut self.tool, Tool::Pencil, "pencil");
+            for tool in [Tool::Hand, Tool::Pencil] {
+                ui.selectable_value(&mut self.tool, tool, tool.icon())
+                    .on_hover_text(tool.name());
+            }
             let inked = self
                 .deck
                 .showing()
@@ -442,6 +444,9 @@ impl eframe::App for Viewer {
             if response.double_clicked() {
                 zoom.reset();
                 pan = egui::Vec2::ZERO;
+            }
+            if response.hovered() || response.dragged() {
+                ctx.set_cursor_icon(self.tool.pointer(response.dragged()));
             }
             if response.dragged() && self.tool == Tool::Hand {
                 pan += response.drag_delta();

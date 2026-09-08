@@ -24,6 +24,39 @@ pub enum Tool {
     Pencil,
 }
 
+impl Tool {
+    /// The glyph the tool is offered by. A picture of the hand and a picture of
+    /// the pencil say what the words «hand» and «pencil» said, and say it
+    /// without being read — the header is chrome around the sheet, and chrome
+    /// competes with the drawing for the eye.
+    pub fn icon(self) -> &'static str {
+        match self {
+            Self::Hand => "✋",
+            Self::Pencil => "✏",
+        }
+    }
+
+    /// The word for the tool, which the icon carries the meaning of and the
+    /// hover gives back to whoever the picture leaves in doubt.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Hand => "hand",
+            Self::Pencil => "pencil",
+        }
+    }
+
+    /// What the pointer becomes over the sheet, so that which tool is in hand
+    /// is legible where the work is and not only up in the header. A hand
+    /// mid-drag closes on what it has taken.
+    pub fn pointer(self, dragging: bool) -> egui::CursorIcon {
+        match (self, dragging) {
+            (Self::Hand, false) => egui::CursorIcon::Grab,
+            (Self::Hand, true) => egui::CursorIcon::Grabbing,
+            (Self::Pencil, _) => egui::CursorIcon::Crosshair,
+        }
+    }
+}
+
 /// One run of the pencil between its down and its up, in diagram coordinates.
 pub type Stroke = Vec<egui::Pos2>;
 
