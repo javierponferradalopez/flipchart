@@ -17,7 +17,8 @@ explaining itself, so it is the only one who shows and clears.
 _Avoid_: model, assistant, client
 
 **User**:
-The one the explanation is for. They read and can go back one sheet; they do not write.
+The one the explanation is for. They read, go back one sheet, and mark — they never
+write the diagram.
 _Avoid_: human, viewer — the Viewer is a piece, not a person
 
 **Host**:
@@ -45,6 +46,15 @@ session is **not** a conversation — `/clear` ends the conversation and the fli
 survives.
 _Avoid_: temporary, volatile
 _Why_: [0011](./docs/adr/0011-the-mcp-session-rules.md)
+
+### The return channel
+
+**Mark**:
+What the User draws over a sheet: ink on glass, never an edit to the diagram underneath.
+It crosses back to the Agent as a picture of the sheet with the ink on it — the Agent
+speaks meaning and the User speaks ink — and it stays until the Agent has resolved it.
+_Avoid_: annotation, note, comment, drawing, edit — each of those names another thing
+_Why_: [0016](./docs/adr/0016-the-return-channel.md)
 
 ### The layers
 
@@ -127,10 +137,10 @@ nothing, and closing its window loses nothing.
 _Avoid_: frontend, client, app, page
 
 **Wire** — `wire.rs` in code:
-The in-memory channel the MCP server hands the deck over on, and the only thing the two
-threads share. It is more than a `Sender`: it also wakes the event loop, which macOS
-stops —not slows— while the window is covered. Whoever holds it needs to know nothing
-about the Viewer, which is why the Viewer depends on nobody.
+The in-memory channel between the two roles, and the only thing the two threads share:
+the deck goes down it, the ink comes back up. It is more than a `Sender`: it also wakes
+the event loop, which macOS stops —not slows— while the window is covered. Whoever holds
+it needs to know nothing about the Viewer, which is why the Viewer depends on nobody.
 _Avoid_: channel — that is the Flipchart as a whole; also bus, queue, IPC, socket
 _Why_: [0001](./docs/adr/0001-one-process-two-threads-no-ipc.md)
 
