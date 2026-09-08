@@ -757,6 +757,22 @@ mod tests {
     }
 
     #[test]
+    fn ink_over_a_replaced_sheet_is_a_fresh_entry_and_not_one_from_before() {
+        let (mut flipchart, commands) = flipchart();
+        flipchart.show("current", TWO_NODES).unwrap();
+        the_user_drew_over(&commands, "current", b"the circled orders");
+        flipchart.marks();
+        flipchart.show("current", THREE_NODES).unwrap();
+
+        the_user_drew_over(&commands, "current", b"a circle on the new sheet");
+
+        let delivered = flipchart.marks();
+        assert_eq!(delivered.len(), 1);
+        assert_eq!(delivered[0].png, b"a circle on the new sheet");
+        assert!(!delivered[0].before_the_last_replace);
+    }
+
+    #[test]
     fn the_ink_of_several_views_arrives_in_creation_order() {
         let (mut flipchart, commands) = flipchart();
         flipchart.show("current", TWO_NODES).unwrap();
