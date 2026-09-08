@@ -5,8 +5,10 @@ use winit::platform::macos::{ActivationPolicy, EventLoopBuilderExtMacOS};
 
 use crate::mac::bring_the_window_forward;
 mod raster;
+mod zoom;
 
 use self::raster::{Rasterizer, Rendered, Scale};
+use self::zoom::{MINIMUM_ZOOM, Zoom};
 use crate::wire::{Command, Commands, DeckSnapshot};
 
 /// Deferred start: the main thread stays on the channel and does not create the
@@ -66,14 +68,17 @@ fn working_directory() -> Option<String> {
     Some(path.file_name()?.to_string_lossy().into_owned())
 }
 
-/// A sheet on screen: what the Viewer remembers of it is its drawing, and the
-/// **zoom is its own** — each View keeps the one its size earned it.
+/// A sheet on screen: what the Viewer remembers of it is its drawing and the
+/// **zoom is its own** — the fit its size earns it and the choice the user made
+/// over it, pan included. A replaced View inherits neither.
 struct Sheet {
     number: u64,
     id: String,
     natural: Option<egui::Vec2>,
     painted: Option<(Scale, egui::TextureHandle)>,
     awaited: Option<Scale>,
+    zoom: Zoom,
+    pan: egui::Vec2,
 }
 
 impl Sheet {
@@ -84,6 +89,8 @@ impl Sheet {
             natural: None,
             painted: None,
             awaited: None,
+            zoom: Zoom::default(),
+            pan: egui::Vec2::ZERO,
         }
     }
 }
@@ -210,15 +217,8 @@ impl Viewer {
         }
     }
 
-    fn request(
-        &mut self,
-        room: egui::Vec2,
-        points_per_pixel: f32,
-    ) -> Option<(egui::TextureHandle, egui::Vec2)> {
+    fn request(&mut self, zoom: f32, points_per_pixel: f32) -> Option<egui::TextureHandle> {
         let sheet = self.deck.showing_mut()?;
-        let natural = sheet.natural?;
-
-        let zoom = fit(natural, room);
         let wanted = Scale::nearest(zoom * points_per_pixel);
         let up_to_date = sheet
             .painted
@@ -230,7 +230,7 @@ impl Viewer {
         }
 
         let (_, texture) = sheet.painted.as_ref()?;
-        Some((texture.clone(), natural * zoom))
+        Some(texture.clone())
     }
 
     /// The flipchart's header: the sheet, its name, two arrows and «sheet N of
@@ -258,7 +258,15 @@ impl Viewer {
     }
 }
 
-const MINIMUM_ZOOM: f32 = 0.05;
+/// The pan stops where the sheet stops having more to give: further than the
+/// overflow and the room looks at the desk, not at the sheet.
+fn panned_within(pan: egui::Vec2, size: egui::Vec2, room: egui::Vec2) -> egui::Vec2 {
+    let overflow = (size - room).max(egui::Vec2::ZERO) / 2.0;
+    egui::vec2(
+        pan.x.clamp(-overflow.x, overflow.x),
+        pan.y.clamp(-overflow.y, overflow.y),
+    )
+}
 
 /// The window is born on the first `show` and is **reborn** on the next one
 /// after a ⌘W, which hides it and does not kill it: in `eframe` closing it ends
@@ -366,8 +374,42 @@ impl eframe::App for Viewer {
             ui.add_space(6.0);
 
             let room = ui.available_size();
-            if let Some((texture, size)) = self.request(room, ctx.pixels_per_point()) {
-                ui.add(egui::Image::new(&texture).fit_to_exact_size(size));
+            let Some(sheet) = self.deck.showing() else {
+                return;
+            };
+            let Some(natural) = sheet.natural else { return };
+            let mut zoom = sheet.zoom;
+            let mut pan = sheet.pan;
+            let fitted = fit(natural, room);
+
+            let (response, painter) = ui.allocate_painter(room, egui::Sense::click_and_drag());
+            let pinch = ctx.input(|input| input.zoom_delta());
+            let wheel = ctx.input(|input| input.smooth_scroll_delta.y);
+            if response.hovered() && (pinch != 1.0 || wheel != 0.0) {
+                zoom.scrolled(pinch * (wheel / 200.0).exp2(), fitted);
+            }
+            if response.double_clicked() {
+                zoom.reset();
+                pan = egui::Vec2::ZERO;
+            }
+            if response.dragged() {
+                pan += response.drag_delta();
+            }
+
+            let size = natural * zoom.of(fitted);
+            pan = panned_within(pan, size, room);
+            if let Some(sheet) = self.deck.showing_mut() {
+                sheet.zoom = zoom;
+                sheet.pan = pan;
+            }
+            if let Some(texture) = self.request(zoom.of(fitted), ctx.pixels_per_point()) {
+                let corner = response.rect.min + (room - size) / 2.0 + pan;
+                painter.image(
+                    texture.id(),
+                    egui::Rect::from_min_size(corner, size),
+                    egui::Rect::from_min_max(egui::Pos2::ZERO, egui::Pos2::new(1.0, 1.0)),
+                    egui::Color32::WHITE,
+                );
             }
         });
     }
@@ -674,5 +716,40 @@ mod tests {
         deck.accept(&flipchart(vec![], None));
 
         assert!(deck.showing().is_none());
+    }
+
+    #[test]
+    fn a_replaced_view_arrives_at_the_fit_and_inherits_no_zoom() {
+        let mut deck = three_sheets();
+        deck.sheets[0].zoom.scrolled(2.0, 0.5);
+
+        deck.accept(&flipchart(
+            vec![
+                drawn(4, "current"),
+                drawn(2, "variant A"),
+                drawn(3, "variant B"),
+            ],
+            Some(0),
+        ));
+
+        assert_eq!(deck.sheets[0].zoom.of(0.5), 0.5);
+    }
+
+    #[test]
+    fn a_show_over_another_view_leaves_the_looked_at_sheets_zoom_alone() {
+        let mut deck = three_sheets();
+        deck.back();
+        deck.sheets[1].zoom.scrolled(2.0, 0.25);
+
+        deck.accept(&flipchart(
+            vec![
+                drawn(1, "current"),
+                drawn(2, "variant A"),
+                drawn(3, "variant B"),
+            ],
+            Some(0),
+        ));
+
+        assert_eq!(deck.sheets[1].zoom.of(0.25), 0.5);
     }
 }
