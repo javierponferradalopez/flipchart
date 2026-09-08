@@ -96,7 +96,7 @@ fn text(result: &Value) -> &str {
 }
 
 #[test]
-fn the_server_exposes_show_and_clear_and_nothing_else() {
+fn the_server_exposes_show_clear_and_marks_and_nothing_else() {
     let mut session = Session::open();
 
     let mut names: Vec<String> = session
@@ -106,7 +106,7 @@ fn the_server_exposes_show_and_clear_and_nothing_else() {
         .collect();
     names.sort();
 
-    assert_eq!(names, ["clear", "show"]);
+    assert_eq!(names, ["clear", "marks", "show"]);
 }
 
 #[test]
@@ -137,6 +137,55 @@ fn clear_carries_the_literal_of_its_description() {
         clear["description"],
         json!("Remove one view from the flipchart, or all of them. Does not close the window.")
     );
+}
+
+#[test]
+fn marks_carries_the_literal_of_its_description() {
+    let mut session = Session::open();
+
+    let marks = tool(&session.tools(), "marks").clone();
+
+    assert_eq!(
+        marks["description"],
+        json!(
+            "Deliver the marks the user drew over the views: one image per view - the whole \
+             sheet with the ink baked in, never the ink alone. No arguments, never an error; \
+             one line means nothing new. Undelivered marks survive a replace of their view and \
+             arrive annotated; delivered ones die at your next show over it - the redraw is \
+             the reply."
+        )
+    );
+}
+
+#[test]
+fn marks_asks_for_nothing() {
+    let mut session = Session::open();
+
+    let schema = tool(&session.tools(), "marks")["inputSchema"].clone();
+
+    assert!(
+        schema["required"]
+            .as_array()
+            .map(|r| r.is_empty())
+            .unwrap_or(true)
+    );
+}
+
+#[test]
+fn an_empty_inbox_answers_as_one_line_of_text_and_nothing_else() {
+    let mut session = Session::open();
+    session.call(
+        "show",
+        json!({ "view_id": "current", "diagram": "flowchart LR\n  A[One] --> B[Two]\n" }),
+    );
+
+    let result = session.call("marks", json!({}));
+
+    assert_eq!(result["isError"], json!(false));
+    let content = result["content"].as_array().expect("a content list");
+    assert_eq!(content.len(), 1);
+    assert_eq!(content[0]["type"], json!("text"));
+    assert_eq!(content[0]["text"], json!("No marks waiting."));
 }
 
 #[test]

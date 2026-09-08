@@ -262,7 +262,7 @@ fn with_the_good_binary_the_launcher_hands_its_place_over() {
     let plugin = PluginBox::with_the_good_binary();
     let mut session = Session::open(&plugin);
 
-    assert_eq!(session.names_of_its_tools(), ["clear", "show"]);
+    assert_eq!(session.names_of_its_tools(), ["clear", "marks", "show"]);
 }
 
 /// `check` opens no window and does not speak MCP, so it serves as a witness
@@ -285,7 +285,7 @@ fn a_binary_without_execute_permission_gets_it_put_on_and_starts() {
     let plugin = PluginBox::with_the_binary_without_permission();
     let mut session = Session::open(&plugin);
 
-    assert_eq!(session.names_of_its_tools(), ["clear", "show"]);
+    assert_eq!(session.names_of_its_tools(), ["clear", "marks", "show"]);
 }
 
 #[test]
