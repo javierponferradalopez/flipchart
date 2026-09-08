@@ -113,10 +113,6 @@ impl Commands {
     /// The Viewer's half of the return lane: one completed stroke, one push.
     /// It wakes nobody — there is nobody to wake; the server comes to read when
     /// the agent asks.
-    #[allow(
-        dead_code,
-        reason = "no GUI produces ink yet; until that ticket, only the tests play the Viewer"
-    )]
     pub(crate) fn push_ink(&self, ink: Ink) {
         let _ = self.ink.send(ink);
     }

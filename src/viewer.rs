@@ -11,7 +11,7 @@ mod zoom;
 use self::glass::{Glass, INK, NIB, Tool};
 use self::raster::{Rasterizer, Rendered, Scale};
 use self::zoom::{MINIMUM_ZOOM, Zoom};
-use crate::wire::{Command, Commands, DeckSnapshot};
+use crate::wire::{Command, Commands, DeckSnapshot, Ink};
 
 /// Deferred start: the main thread stays on the channel and does not create the
 /// event loop —nor the 97 MB it costs— until the agent asks for the first
@@ -145,6 +145,10 @@ impl Deck {
         self.sheets.get_mut(self.cursor)
     }
 
+    fn sheet(&self, number: u64) -> Option<&Sheet> {
+        self.sheets.iter().find(|sheet| sheet.number == number)
+    }
+
     fn sheet_mut(&mut self, number: u64) -> Option<&mut Sheet> {
         self.sheets.iter_mut().find(|sheet| sheet.number == number)
     }
@@ -220,8 +224,29 @@ impl Viewer {
                     sheet.awaited = None;
                     sheet.painted = Some((scale, texture));
                 }
+                Rendered::Marked { sheet: number, png } => {
+                    let Some(sheet) = self.deck.sheet(number) else {
+                        continue;
+                    };
+                    self.commands.push_ink(Ink {
+                        view_id: sheet.id.clone(),
+                        png,
+                    });
+                }
             }
         }
+    }
+
+    /// The stroke is finished, so the round trip starts: the sheet is drawn
+    /// again at its natural size with all the ink over it, and what comes back
+    /// goes straight up the Wire, where the server replaces whatever it held
+    /// for that View. The Viewer keeps nothing — it renders and forwards.
+    fn a_stroke_was_completed(&mut self) {
+        let Some(sheet) = self.deck.showing() else {
+            return;
+        };
+        self.rasterizer
+            .mark(sheet.number, sheet.glass.strokes().to_vec());
     }
 
     fn request(&mut self, zoom: f32, points_per_pixel: f32) -> Option<egui::TextureHandle> {
@@ -441,6 +466,9 @@ impl eframe::App for Viewer {
                         sheet.glass.continued(on_the_sheet(pointer, corner, scale));
                     }
                 }
+            }
+            if self.tool == Tool::Pencil && response.drag_stopped() {
+                self.a_stroke_was_completed();
             }
             if let Some(texture) = self.request(scale, ctx.pixels_per_point()) {
                 painter.image(
