@@ -1,9 +1,9 @@
 # flipchart — an ephemeral whiteboard for agents
 
-A temporary visual channel for an AI agent to explain itself: when it tells you about a
-structure or a change of structure, it draws it in a native window instead of in ASCII or
-in prose. It holds several views and shows one at a time; it dies with the session and
-stores nothing.
+A temporary visual channel for an AI agent to explain itself: where it would otherwise
+paint the graph in ASCII inside its answer, it draws it in a native window instead — and it
+draws when you ask it to. It holds several views and shows one at a time; it dies with the
+session and stores nothing.
 
 ## Requirements
 
@@ -26,14 +26,21 @@ Claude Code:
 And a third step that is **not optional**: paste this line into your `CLAUDE.md`.
 
 ```
-When you explain a structure or a change of structure to me, draw it on the
-flipchart with mcp__plugin_flipchart_flipchart__show instead of in ASCII or in prose.
+Explain in prose. Draw on the flipchart with mcp__plugin_flipchart_flipchart__show
+in exactly two cases: when you catch yourself starting an ASCII diagram, and when
+I ask you to draw something.
 ```
 
 Without it the flipchart sits installed and never gets used: on its own initiative the
 agent never offers it —**0 out of 36 turns** measured
 ([ADR 0012](./docs/adr/0012-the-trigger-lives-outside-the-binary.md))— and paints the graph
 in ASCII inside its answer.
+
+The line asks for **less** than the one measured in 0012, which drew on any explanation of a
+structure and so drew on almost every answer
+([ADR 0017](./docs/adr/0017-drawing-is-the-exception.md)). Prose is the default and the two
+cases are the whole list. If you would rather have a flipchart that volunteers more, add a
+third case — the wide 0012 wording is the only one with a measurement behind it.
 
 That `mcp__plugin_flipchart_flipchart__show` is the name Claude Code presents the tool
 under when flipchart arrives as a plugin: the host composes the server name as

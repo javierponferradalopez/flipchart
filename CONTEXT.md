@@ -32,7 +32,7 @@ _Avoid_: IDE, editor, Claude Code — the term is the role, not one product
 The temporary visual channel as a whole. It holds N Views and shows one at a time with
 no index of the others, and the agent is the one who turns the page.
 _Avoid_: canvas, board, whiteboard; and as identifiers, `canvas`, `board`, `whiteboard`
-_Why_: [0009](./docs/adr/0009-one-sheet-no-index.md), [0010](./docs/adr/0010-window-to-the-front-without-the-keyboard.md), [0012](./docs/adr/0012-the-trigger-lives-outside-the-binary.md)
+_Why_: [0009](./docs/adr/0009-one-sheet-no-index.md), [0010](./docs/adr/0010-window-to-the-front-without-the-keyboard.md), [0012](./docs/adr/0012-the-trigger-lives-outside-the-binary.md), [0017](./docs/adr/0017-drawing-is-the-exception.md)
 
 **View**:
 One of the N named representations that coexist on the flipchart at once. Its `id` is

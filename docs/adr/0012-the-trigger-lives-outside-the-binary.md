@@ -1,6 +1,6 @@
 # The trigger lives outside the binary
 
-**Status:** accepted · **Date:** 2026-09-03
+**Status:** accepted · **Date:** 2026-09-03 · **Refined by** [0017](./0017-drawing-is-the-exception.md)
 
 This is not a documentation detail: it is the product's main trigger, and it is outside
 the binary knowingly.
