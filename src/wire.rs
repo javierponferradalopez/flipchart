@@ -1,11 +1,15 @@
 //! The wire: the in-memory channel between the two threads of the Flipchart
 //! process. The server thread owns the state and hands the whole deck over; the
-//! main thread only draws what arrives.
+//! main thread only draws what arrives — and pushes the user's ink back up
+//! (ADR-0016).
 //!
 //! It is more than a `Sender` because of what ADR-0001 measured: with the window
 //! covered macOS **stops** the event loop, so whoever sends also has to wake it.
+//! The return lane needs no waking: it is push-only, and the server comes to
+//! read on the agent's own time.
 
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::OnceLock;
 use std::sync::mpsc::{Receiver, Sender, channel};
 
@@ -37,6 +41,15 @@ pub enum Command {
     SessionOver,
 }
 
+/// The user's ink coming back up: the picture of one whole sheet with the marks
+/// baked in, pushed by the Viewer on each completed stroke. Push, not pull: the
+/// server folds it into its inbox and the Viewer remembers nothing.
+#[derive(Debug)]
+pub struct Ink {
+    pub view_id: String,
+    pub png: Vec<u8>,
+}
+
 /// The in-memory channel from the server to the Viewer. It is more than a
 /// `Sender`: it wakes the event loop, which macOS does not slow down but
 /// **stops** when the window is covered — and covered is the normal case, with
@@ -44,12 +57,25 @@ pub enum Command {
 #[derive(Debug, Clone)]
 pub struct Wire {
     commands: Sender<Command>,
+    ink: InkWaiting,
     awake: Waker,
 }
 
 impl Wire {
     pub fn send(&self, snapshot: DeckSnapshot) {
         self.tell(Command::Show(snapshot));
+    }
+
+    /// The ink that came up while nobody was looking. The server drains it at
+    /// every turn of the agent's —`show`, `clear`, `marks`— so that each push
+    /// is folded against the sheet it was drawn over, not the one on screen by
+    /// the time it is read.
+    pub(crate) fn take_the_ink(&self) -> Vec<Ink> {
+        let pending = self
+            .ink
+            .lock()
+            .expect("the ink is never held across a panic");
+        std::iter::from_fn(|| pending.try_recv().ok()).collect()
     }
 
     /// The Viewer's goodbye, sent by the server thread because it is the only
@@ -71,6 +97,7 @@ impl Wire {
 #[derive(Debug)]
 pub struct Commands {
     commands: Receiver<Command>,
+    ink: Sender<Ink>,
     awake: Waker,
 }
 
@@ -83,6 +110,17 @@ impl Commands {
         self.commands.try_recv().ok()
     }
 
+    /// The Viewer's half of the return lane: one completed stroke, one push.
+    /// It wakes nobody — there is nobody to wake; the server comes to read when
+    /// the agent asks.
+    #[allow(
+        dead_code,
+        reason = "no GUI produces ink yet; until that ticket, only the tests play the Viewer"
+    )]
+    pub(crate) fn push_ink(&self, ink: Ink) {
+        let _ = self.ink.send(ink);
+    }
+
     /// The Viewer arms the waker with its own context once the event loop
     /// exists. Until it does there is nobody to wake, and `Wire` reads that
     /// absence to know whether there was ever a window.
@@ -92,17 +130,21 @@ impl Commands {
 }
 
 type Waker = Arc<OnceLock<egui::Context>>;
+type InkWaiting = Arc<Mutex<Receiver<Ink>>>;
 
 pub fn wire() -> (Wire, Commands) {
     let (commands, pending) = channel();
+    let (ink, ink_waiting) = channel();
     let awake: Waker = Arc::default();
     (
         Wire {
             commands,
+            ink: Arc::new(Mutex::new(ink_waiting)),
             awake: awake.clone(),
         },
         Commands {
             commands: pending,
+            ink,
             awake,
         },
     )
