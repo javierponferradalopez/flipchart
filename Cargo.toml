@@ -15,6 +15,7 @@ dbg_macro = "deny"
 print_stdout = "deny"
 
 [dependencies]
+base64 = "0.22"
 eframe = "0.36.1"
 mermaid-rs-renderer = { version = "=0.3.1", default-features = false }
 objc2 = "0.6"

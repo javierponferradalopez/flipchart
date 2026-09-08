@@ -11,6 +11,25 @@ struct View {
     diagram: String,
     svg: String,
     drawn: u64,
+    mark: Option<Mark>,
+}
+
+/// The inbox entry, per View: the latest marked image and whether the agent has
+/// been shown it (ADR-0016). `sheet` is the one the ink was drawn over, which a
+/// replace of the View may already have left behind.
+#[derive(Debug)]
+struct Mark {
+    png: Vec<u8>,
+    sheet: u64,
+    undelivered: bool,
+}
+
+/// One sheet's undelivered ink, ready to cross back into the agent's context.
+#[derive(Debug)]
+pub struct MarkedSheet {
+    pub view_id: String,
+    pub before_the_last_replace: bool,
+    pub png: Vec<u8>,
 }
 
 #[derive(Debug)]
@@ -30,6 +49,7 @@ impl Flipchart {
     }
 
     pub fn show(&mut self, view_id: &str, diagram: &str) -> Result<String, String> {
+        self.fold_the_ink();
         let id = view_id.trim();
         self.draw(id, diagram)
             .map_err(|rejection| rejection.told_about(id))
@@ -63,12 +83,19 @@ impl Flipchart {
                 view.diagram = source.to_string();
                 view.svg = drawing.svg.clone();
                 view.drawn = drawn;
+                // The redraw is the reply: ink the agent has already been shown
+                // has no glass left to live on, while unread ink waits — and
+                // will say it was drawn over the sheet before this replace.
+                if view.mark.as_ref().is_some_and(|mark| !mark.undelivered) {
+                    view.mark = None;
+                }
             }
             None => self.views.push(View {
                 id: id.to_string(),
                 diagram: source.to_string(),
                 svg: drawing.svg.clone(),
                 drawn,
+                mark: None,
             }),
         }
         let acknowledgement = drawing.noted_after(format!(
@@ -82,6 +109,7 @@ impl Flipchart {
     }
 
     pub fn clear(&mut self, view_id: Option<&str>) -> String {
+        self.fold_the_ink();
         let Some(id) = view_id else {
             if self.views.is_empty() {
                 return "The flipchart was already empty.".to_string();
@@ -97,6 +125,43 @@ impl Flipchart {
         self.views.remove(position);
         self.hand_the_deck_over();
         format!("Cleared view \"{id}\". {}", self.views_on_the_flipchart())
+    }
+
+    /// The return channel's read end: every View with undelivered ink answers
+    /// with its image, once; a second call returns only what arrived since.
+    /// Reading informs, it does not delete — but the image leaves with the
+    /// delivery, because what is delivered only ever waits for its `show`.
+    pub fn marks(&mut self) -> Vec<MarkedSheet> {
+        self.fold_the_ink();
+        let mut delivered = Vec::new();
+        for view in &mut self.views {
+            let Some(mark) = &mut view.mark else { continue };
+            if !mark.undelivered {
+                continue;
+            }
+            mark.undelivered = false;
+            delivered.push(MarkedSheet {
+                view_id: view.id.clone(),
+                before_the_last_replace: mark.sheet < view.drawn,
+                png: std::mem::take(&mut mark.png),
+            });
+        }
+        delivered
+    }
+
+    /// Every turn of the agent's drains the return lane first, so that ink is
+    /// folded against the sheet it was drawn over and not the one on screen by
+    /// the time it is read. Ink over a View that is already gone dies with it.
+    fn fold_the_ink(&mut self) {
+        for ink in self.viewer.take_the_ink() {
+            if let Some(view) = self.views.iter_mut().find(|view| view.id == ink.view_id) {
+                view.mark = Some(Mark {
+                    png: ink.png,
+                    sheet: view.drawn,
+                    undelivered: true,
+                });
+            }
+        }
     }
 
     /// The order is the order of creation and the front one is the one from the
@@ -167,7 +232,7 @@ impl Flipchart {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::wire::{Command, Commands, wire};
+    use crate::wire::{Command, Commands, Ink, wire};
 
     const TWO_NODES: &str = "flowchart LR\n  A[One] --> B[Two]\n";
     const THREE_NODES: &str = "flowchart LR\n  A[One] --> B[Two]\n  B --> C[Three]\n";
@@ -198,6 +263,13 @@ mod tests {
     fn front(snapshot: &DeckSnapshot) -> &str {
         let front = snapshot.front.expect("there is a sheet at the front");
         &snapshot.sheets[front].id
+    }
+
+    fn the_user_drew_over(commands: &Commands, view_id: &str, png: &[u8]) {
+        commands.push_ink(Ink {
+            view_id: view_id.to_string(),
+            png: png.to_vec(),
+        });
     }
 
     #[test]
@@ -551,5 +623,153 @@ mod tests {
 
         assert!(rejection.starts_with("Rejected: nothing was drawn;"));
         assert_eq!(flipchart.view("current"), None);
+    }
+
+    #[test]
+    fn an_inbox_with_nothing_in_it_answers_with_nothing() {
+        let (mut flipchart, _commands) = flipchart();
+        flipchart.show("current", TWO_NODES).unwrap();
+
+        assert!(flipchart.marks().is_empty());
+    }
+
+    #[test]
+    fn ink_is_delivered_once_as_the_picture_of_its_sheet() {
+        let (mut flipchart, commands) = flipchart();
+        flipchart.show("current", TWO_NODES).unwrap();
+        the_user_drew_over(&commands, "current", b"the circled orders");
+
+        let delivered = flipchart.marks();
+
+        assert_eq!(delivered.len(), 1);
+        assert_eq!(delivered[0].view_id, "current");
+        assert_eq!(delivered[0].png, b"the circled orders");
+        assert!(!delivered[0].before_the_last_replace);
+    }
+
+    #[test]
+    fn a_second_call_delivers_only_what_arrived_since() {
+        let (mut flipchart, commands) = flipchart();
+        flipchart.show("current", TWO_NODES).unwrap();
+        the_user_drew_over(&commands, "current", b"the circled orders");
+        flipchart.marks();
+
+        assert!(flipchart.marks().is_empty());
+    }
+
+    #[test]
+    fn a_later_push_replaces_the_image_and_does_not_accumulate() {
+        let (mut flipchart, commands) = flipchart();
+        flipchart.show("current", TWO_NODES).unwrap();
+        the_user_drew_over(&commands, "current", b"first stroke");
+        the_user_drew_over(&commands, "current", b"second stroke");
+
+        let delivered = flipchart.marks();
+
+        assert_eq!(delivered.len(), 1);
+        assert_eq!(delivered[0].png, b"second stroke");
+    }
+
+    #[test]
+    fn ink_over_a_view_that_is_gone_dies_with_it() {
+        let (mut flipchart, commands) = flipchart();
+        flipchart.show("current", TWO_NODES).unwrap();
+        flipchart.clear(Some("current"));
+
+        the_user_drew_over(&commands, "current", b"the circled orders");
+
+        assert!(flipchart.marks().is_empty());
+    }
+
+    #[test]
+    fn clearing_a_view_kills_its_ink_read_or_not() {
+        let (mut flipchart, commands) = flipchart();
+        flipchart.show("current", TWO_NODES).unwrap();
+        the_user_drew_over(&commands, "current", b"the circled orders");
+
+        flipchart.clear(Some("current"));
+
+        assert!(flipchart.marks().is_empty());
+    }
+
+    #[test]
+    fn a_view_shown_again_after_a_clear_does_not_inherit_the_ink() {
+        let (mut flipchart, commands) = flipchart();
+        flipchart.show("current", TWO_NODES).unwrap();
+        the_user_drew_over(&commands, "current", b"the circled orders");
+        flipchart.clear(Some("current"));
+        flipchart.show("current", THREE_NODES).unwrap();
+
+        assert!(flipchart.marks().is_empty());
+    }
+
+    #[test]
+    fn clearing_the_whole_flipchart_kills_the_ink_of_every_view() {
+        let (mut flipchart, commands) = flipchart();
+        flipchart.show("current", TWO_NODES).unwrap();
+        flipchart.show("proposed", THREE_NODES).unwrap();
+        the_user_drew_over(&commands, "current", b"the circled orders");
+        the_user_drew_over(&commands, "proposed", b"an underlined edge");
+
+        flipchart.clear(None);
+
+        assert!(flipchart.marks().is_empty());
+    }
+
+    #[test]
+    fn undelivered_ink_survives_a_replace_and_arrives_annotated() {
+        let (mut flipchart, commands) = flipchart();
+        flipchart.show("current", TWO_NODES).unwrap();
+        the_user_drew_over(&commands, "current", b"the circled orders");
+
+        flipchart.show("current", THREE_NODES).unwrap();
+
+        let delivered = flipchart.marks();
+        assert_eq!(delivered.len(), 1);
+        assert_eq!(delivered[0].png, b"the circled orders");
+        assert!(delivered[0].before_the_last_replace);
+    }
+
+    #[test]
+    fn delivered_ink_is_dropped_by_the_next_show_over_that_view() {
+        let (mut flipchart, commands) = flipchart();
+        flipchart.show("current", TWO_NODES).unwrap();
+        the_user_drew_over(&commands, "current", b"the circled orders");
+        flipchart.marks();
+
+        flipchart.show("current", THREE_NODES).unwrap();
+
+        assert!(flipchart.marks().is_empty());
+    }
+
+    #[test]
+    fn ink_that_arrives_after_a_delivery_is_delivered_again() {
+        let (mut flipchart, commands) = flipchart();
+        flipchart.show("current", TWO_NODES).unwrap();
+        the_user_drew_over(&commands, "current", b"the circled orders");
+        flipchart.marks();
+        the_user_drew_over(&commands, "current", b"an underlined edge");
+
+        let delivered = flipchart.marks();
+
+        assert_eq!(delivered.len(), 1);
+        assert_eq!(delivered[0].png, b"an underlined edge");
+    }
+
+    #[test]
+    fn the_ink_of_several_views_arrives_in_creation_order() {
+        let (mut flipchart, commands) = flipchart();
+        flipchart.show("current", TWO_NODES).unwrap();
+        flipchart.show("proposed", THREE_NODES).unwrap();
+        the_user_drew_over(&commands, "proposed", b"an underlined edge");
+        the_user_drew_over(&commands, "current", b"the circled orders");
+
+        let delivered = flipchart.marks();
+        let ids: Vec<&str> = delivered
+            .iter()
+            .map(|sheet| sheet.view_id.as_str())
+            .collect();
+
+        assert_eq!(ids, ["current", "proposed"]);
     }
 }

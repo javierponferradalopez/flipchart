@@ -1,5 +1,6 @@
 use std::sync::Mutex;
 
+use base64::Engine as _;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{CallToolResult, ContentBlock, Implementation, ServerCapabilities, ServerInfo};
 use rmcp::{ServerHandler, ServiceExt, tool, tool_router};
@@ -11,6 +12,7 @@ mod flipchart;
 mod lifecycle;
 
 use self::flipchart::Flipchart;
+use self::flipchart::MarkedSheet;
 use self::lifecycle::the_session_is_over;
 use crate::wire::Wire;
 
@@ -60,6 +62,29 @@ impl FlipchartServer {
     }
 
     #[tool(
+        description = "Deliver the marks the user drew over the views: one image per view - the whole sheet with the ink baked in, never the ink alone. No arguments, never an error; one line means nothing new. Undelivered marks survive a replace of their view and arrive annotated; delivered ones die at your next show over it - the redraw is the reply."
+    )]
+    async fn marks(&self) -> CallToolResult {
+        let delivered = self
+            .flipchart
+            .lock()
+            .expect("the flipchart lock is never held across a panic")
+            .marks();
+        let mut content = Vec::new();
+        for sheet in delivered {
+            content.push(ContentBlock::text(the_reply_to(&sheet)));
+            content.push(ContentBlock::image(
+                base64::engine::general_purpose::STANDARD.encode(sheet.png),
+                "image/png",
+            ));
+        }
+        if content.is_empty() {
+            content.push(ContentBlock::text("No marks waiting."));
+        }
+        CallToolResult::success(content)
+    }
+
+    #[tool(
         description = "Remove one view from the flipchart, or all of them. Does not close the window."
     )]
     async fn clear(&self, Parameters(params): Parameters<ClearParams>) -> CallToolResult {
@@ -69,6 +94,20 @@ impl FlipchartServer {
             .expect("the flipchart lock is never held across a panic")
             .clear(params.view_id.as_deref());
         CallToolResult::success(vec![ContentBlock::text(text)])
+    }
+}
+
+/// The line that introduces a delivered image. Ink folded against a sheet the
+/// agent has since replaced says so: the circles are about the old diagram,
+/// and the agent must not read them as comments on the new one.
+fn the_reply_to(sheet: &MarkedSheet) -> String {
+    if sheet.before_the_last_replace {
+        format!(
+            "Marks on view \"{}\" - drawn over the sheet as it was before the last replace:",
+            sheet.view_id
+        )
+    } else {
+        format!("Marks on view \"{}\":", sheet.view_id)
     }
 }
 
