@@ -122,7 +122,7 @@ fn the_versioned_manifest() -> Value {
 }
 
 #[test]
-fn the_box_carries_the_four_files_and_nothing_else() {
+fn the_box_carries_the_five_files_and_nothing_else() {
     let bench = Bench::new();
 
     let names: Vec<String> = inside_the_zip(&bench.the_zip())
@@ -137,9 +137,46 @@ fn the_box_carries_the_four_files_and_nothing_else() {
             ".claude-plugin/plugin.json",
             ".mcp.json",
             "flipchart",
-            "launcher.sh"
+            "launcher.sh",
+            "skills/choosing-the-family/SKILL.md"
         ]
     );
+}
+
+/// The one skill of ADR-0018, and the reason the box is packed file by file: a
+/// `cp -R` here would ship whatever else the working tree happens to hold.
+#[test]
+fn the_skill_in_the_repo_is_the_one_that_gets_packed() {
+    let bench = Bench::new();
+    let versioned = fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/publishing/box/skills/choosing-the-family/SKILL.md"
+    ))
+    .expect("the repo's skill reads");
+
+    let packed = from_the_zip(&bench.the_zip(), "skills/choosing-the-family/SKILL.md");
+
+    assert_eq!(packed, versioned);
+}
+
+/// A skill with no `description` is one the agent cannot reach on its own, and
+/// reaching it on its own —once it has decided to draw— is its whole job.
+#[test]
+fn the_skill_declares_a_description_the_agent_can_be_reached_by() {
+    let bench = Bench::new();
+
+    let packed = from_the_zip(&bench.the_zip(), "skills/choosing-the-family/SKILL.md");
+
+    let frontmatter = packed
+        .strip_prefix("---\n")
+        .and_then(|rest| rest.split_once("\n---"))
+        .expect("the skill opens with frontmatter")
+        .0;
+    assert!(
+        frontmatter.contains("name: choosing-the-family"),
+        "{frontmatter}"
+    );
+    assert!(frontmatter.contains("description: "), "{frontmatter}");
 }
 
 /// What the host does is `chmod(mode & 0o777)` when the zip carries an execute

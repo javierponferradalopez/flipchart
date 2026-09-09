@@ -1,6 +1,6 @@
 #!/bin/bash
-# Packs the box: the four files of ADR-0013 and nothing else, into an Info-ZIP
-# zip, and writes the path of the zip to stdout.
+# Packs the box: the five files of ADR-0013 and ADR-0018 and nothing else, into
+# an Info-ZIP zip, and writes the path of the zip to stdout.
 #
 #   package.sh <version-or-tag> <binary> <destination>
 #
@@ -50,10 +50,11 @@ declared=$(field version "$(grep -m1 '"version"' "$ROOT/$MANIFEST")") \
 from_cargo=$(the_version_in_cargo_toml)
 [ "$from_cargo" = "$VERSION" ] || die "Cargo.toml declares $from_cargo and the tag says $VERSION"
 
-# The four files are copied one by one and there is no `cp -R` of a whole
+# The five files are copied one by one and there is no `cp -R` of a whole
 # directory, which is what would let in a `.DS_Store` from the working tree or a
-# `skills/` someone added along the way. The box of ADR-0013 is closed, so there
-# is no need to check that it is: there is no way in for a fifth file.
+# second skill someone added along the way. The box is closed —four files by
+# ADR-0013, the one skill of ADR-0018— so there is no need to check that it is:
+# there is no way in for a sixth file.
 readonly BOX="$DESTINATION/box"
 rm -rf "$BOX"
 mkdir -p "$BOX/.claude-plugin"
@@ -61,8 +62,12 @@ cp "$ROOT/publishing/box/.claude-plugin/plugin.json" "$BOX/.claude-plugin/plugin
 cp "$ROOT/publishing/box/.mcp.json" "$BOX/.mcp.json"
 cp "$ROOT/launcher.sh" "$BOX/launcher.sh"
 cp "$BINARY" "$BOX/flipchart"
+mkdir -p "$BOX/skills/choosing-the-family"
+cp "$ROOT/publishing/box/skills/choosing-the-family/SKILL.md" \
+  "$BOX/skills/choosing-the-family/SKILL.md"
 chmod 755 "$BOX/launcher.sh" "$BOX/flipchart"
-chmod 644 "$BOX/.claude-plugin/plugin.json" "$BOX/.mcp.json"
+chmod 644 "$BOX/.claude-plugin/plugin.json" "$BOX/.mcp.json" \
+  "$BOX/skills/choosing-the-family/SKILL.md"
 
 readonly ZIP="$DESTINATION/flipchart-$VERSION.zip"
 rm -f "$ZIP"
