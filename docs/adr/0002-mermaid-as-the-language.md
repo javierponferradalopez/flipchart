@@ -1,6 +1,6 @@
 # Mermaid as the language, not a protocol of our own
 
-**Status:** accepted · **Date:** 2026-09-02
+**Status:** accepted · **Date:** 2026-09-02 · **Extended by** [0018](./0018-the-box-carries-one-skill.md)
 
 **The agent writes Mermaid.** There is no protocol of our own, no primitives, no
 `kind`, no patch. The Visual Protocol is a *subset* of Mermaid —meaning, with every
@@ -37,6 +37,12 @@ icons. `wireframe` is the one real exception — Mermaid does not have it.
 
 Worth keeping in mind: the agent picks unmeasured families on its own
 (`sequenceDiagram`, 4 of 17 spontaneous diagrams).
+
+**[0018](./0018-the-box-carries-one-skill.md) measured six of them**, on 2026-09-09:
+`sequenceDiagram`, `erDiagram` and `requirementDiagram` draw; `stateDiagram-v2` draws as
+long as it does not write `[*]`; `journey`, `mindmap` and `block-beta` are rejected. And
+the same reading from the other end: `C4Context`, `gitGraph` and `timeline` come out with
+a real SVG and an **empty `Graph`**, so the honest limit inspects nothing in them.
 
 ## Considered options
 

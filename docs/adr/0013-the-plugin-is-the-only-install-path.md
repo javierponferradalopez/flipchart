@@ -1,6 +1,6 @@
 # The plugin is the only install path: a verified zip, no git
 
-**Status:** accepted · **Date:** 2026-09-03
+**Status:** accepted · **Date:** 2026-09-03 · **Refined by** [0018](./0018-the-box-carries-one-skill.md)
 
 **A Claude Code plugin, and it is the only install path.** The binary is still an ordinary
 MCP server over stdio —free by construction— but it **is not documented, not tested and not
@@ -10,6 +10,11 @@ supported** outside Claude Code.
 and nothing else:** no `skills/`, no `commands/`, no `hooks/`. A zero-toll skill is exactly
 the one the model **cannot** invoke, so it cannot own anything; and a `/flipchart:*` in the
 menu is product surface promising a control over the flipchart that the user does not have.
+
+*[0018](./0018-the-box-carries-one-skill.md) adds a fifth file, one skill, and the reason
+above is what it had to answer: that skill owns nothing —it does not trigger the flipchart—
+and it fires on a decision the agent has already taken. The box stays closed against
+anything that would claim the trigger.*
 
 ## The vehicle: a verified zip, and zero git on the client
 
