@@ -42,6 +42,12 @@ structure and so drew on almost every answer
 cases are the whole list. If you would rather have a flipchart that volunteers more, add a
 third case — the wide 0012 wording is the only one with a measurement behind it.
 
+The box also ships one skill, `choosing-the-family`, which the agent reaches on its own
+once it has decided to draw: which Mermaid family fits what it is explaining —a flowchart
+for structure, a sequence for an exchange over time, a class diagram for types— and the
+three lines that get a diagram rejected. It installs with the plugin and needs no line of
+yours ([ADR 0018](./docs/adr/0018-the-box-carries-one-skill.md)).
+
 That `mcp__plugin_flipchart_flipchart__show` is the name Claude Code presents the tool
 under when flipchart arrives as a plugin: the host composes the server name as
 `plugin:<plugin>:<server>`. Leave it as `mcp__flipchart__show` and you are naming a tool
