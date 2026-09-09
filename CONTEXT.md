@@ -64,6 +64,14 @@ containment— with every id declared and nothing that asks for pixels.
 _Avoid_: format, payload, DSL, and "Mermaid" on its own — the whole language is not the protocol
 _Why_: [0002](./docs/adr/0002-mermaid-as-the-language.md)
 
+**Family**:
+The kind of diagram a VisualDocument is written as —`flowchart`, `classDiagram`,
+`sequenceDiagram`, `erDiagram`, `stateDiagram-v2`, `architecture-beta`—, declared by its
+first line. The agent chooses it from what it is explaining; six of them are measured and
+the rest are untested.
+_Avoid_: type, kind, diagram type, chart type
+_Why_: [0002](./docs/adr/0002-mermaid-as-the-language.md), [0018](./docs/adr/0018-the-box-carries-one-skill.md)
+
 **VisualDocument**:
 The complete semantic state of a View, written in the Visual Protocol. It is the truth
 of the View, not a copy of something earlier.
