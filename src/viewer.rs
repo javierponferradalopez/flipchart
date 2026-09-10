@@ -3,7 +3,7 @@
 use eframe::egui;
 use winit::platform::macos::{ActivationPolicy, EventLoopBuilderExtMacOS};
 
-use crate::mac::bring_the_window_forward;
+use crate::mac::{bring_the_window_forward, put_the_logo_in_the_dock};
 mod glass;
 mod raster;
 mod zoom;
@@ -20,6 +20,7 @@ pub fn open_at_the_first_show(commands: Commands) {
     let Some(first) = wait_for_the_first_show(&commands) else {
         return;
     };
+    put_the_logo_in_the_dock();
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title(title())
