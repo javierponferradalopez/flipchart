@@ -1,29 +1,135 @@
-# flipchart — an ephemeral whiteboard for agents
+<div align="center">
 
-A temporary visual channel for an AI agent to explain itself: where it would otherwise
-paint the graph in ASCII inside its answer, it draws it in a native window instead — and it
-draws when you ask it to. It holds several views and shows one at a time; it dies with the
-session and stores nothing.
+# flipchart
 
-## Requirements
+**Before you write the code, the agent shows you the flow — and what its plan leaves
+behind — on a real whiteboard instead of painting it in ASCII inside the chat. And you can
+draw back.**
 
-- **macOS 11 or later**, Intel or Apple Silicon. Tested on macOS 26.6.2 arm64.
-  Linux and Windows are neither tested nor promised.
-- A version of Claude Code with plugin support.
-- **Nothing else**: no Node, no Python, no browser, no Rust toolchain.
+A **Claude Code plugin for macOS** — an ephemeral visual channel for your agent.
+One native binary, two lines to install.
 
-## Installation
+[The problem](#the-problem) · [When it earns its place](#when-it-earns-its-place) · [A session](#a-session) · [Install](#install) · [What you can ask](#what-you-can-ask) · [How it works](#how-it-works)
 
-It installs as a Claude Code plugin, and that is the only install path
-([ADR 0013](./docs/adr/0013-the-plugin-is-the-only-install-path.md)). Two lines inside
-Claude Code:
+</div>
+
+> **Note:** it installs into a Claude Code environment, and that is the only install path
+> ([ADR 0013](./docs/adr/0013-the-plugin-is-the-only-install-path.md)). The binary is an
+> ordinary MCP server over stdio, so other hosts are not impossible — they are
+> **undocumented, untested and unsupported**, and the trigger, the tool name and the skill
+> below are all Claude Code's. It is macOS only and early: six diagram families are
+> measured, `subgraph` grouping is the weak spot, and Linux and Windows are neither tested
+> nor promised.
+
+## The problem
+
+You are about to touch the payment capture of a service you did not write, so you ask the
+agent how it works today. Seven parts, fourteen messages, a duplicate webhook and a refund
+that overtakes its own capture. The agent has exactly one surface to answer on — the chat —
+so it paints it there:
+
+```
+Buyer      Checkout   Payments   Provider   Webhook    Ledger     DeadLetter
+  |          |          |          |          |          |          |
+  |--place-->|          |          |          |          |          |
+  |          |--auth--->|          |          |          |          |
+  |          |          |--card--->|          |          |          |
+  |          |          |<--ok(*1)-|          |          |          |
+  |          |<--pend---|          |          |          |          |
+  |<--acc'd--|          |          |          |          |          |
+  |          |          |          |--capt--->|          |          |
+  |          |          |          |          |--rec---->|          |
+  |          |          |          |--capt--->|          |          |  (*2)
+  |          |          |          |          |--ign---->|          |
+  |          |          |          |--refnd-->|          |          |  (*3)
+  |          |          |          |          |--park-------------->|
+  |          |          |          |          |<--replayed----------|  (*4)
+  |          |          |          |          |--rec---->|          |
+
+(*1) "authorized, capture pending" — it does not fit in ten columns.
+(*2) the same event id as three rows above: this is the duplicate, and the drawing
+     cannot say that the two arrows carry the same id.
+(*3) payment.refunded, and the capture it belongs to has not been seen yet. The
+     ordering is the entire point and the picture cannot express it.
+(*4) replayed only once the capture had landed, which was four rows earlier, so the
+     arrow appears to come from nowhere.
+```
+
+Every label is abbreviated to six characters, the arrow to the dead letter queue is drawn
+straight through the Ledger's lifeline, and the three things you actually asked about —
+which event is the duplicate, that the refund overtook the capture, and why the replay
+works — are all down in the footnotes.
+
+It cost a few hundred tokens of pipes and dashes to get there. It does not survive a
+narrower terminal, another font or a paste into Slack. And in ten turns it is lost in the
+scrollback, right when you start writing the code.
+
+## When it earns its place
+
+Two moments, both of them before the diff exists:
+
+- **The agent has to explain a flow to you.** Who calls whom, in what order, what happens
+  on the retry. You are reading unfamiliar code and the answer is a shape, not a paragraph.
+- **You want to see what the plan leaves behind.** You asked for a plan; a list of steps
+  does not tell you the shape of the system afterwards. The sheet does, and it is cheap to
+  reject a box on the wall and expensive to reject it in a pull request.
+
+The rest of the time the agent stays in prose. Drawing is the exception, not the default
+([ADR 0017](./docs/adr/0017-drawing-is-the-exception.md)).
+
+## A session
+
+**1. You ask how the capture flow works before you touch it.**
+
+The agent answers in prose, and writes the exchange as meaning — no colors, no shapes, no
+direction.
+
+A native window comes to the front and does not take the keyboard, so you never stop
+typing.
+
+![The capture flow as a sequence diagram in the flipchart window: buyer, checkout, payments, provider, webhook, ledger and dead letter, with the duplicate capture, the early refund and its replay](./docs/images/the-flow-on-the-flipchart.png)
+
+Seven lifelines, fourteen messages, every label whole. The duplicate `payment.captured`
+that the webhook ignores, the `payment.refunded` that arrives **before** its capture, the
+park in the dead letter queue and the replay after it. No footnotes.
+
+**2. You spot something and circle it.**
+
+![The flipchart window with a red circle drawn by hand around the pending reply and the order accepted message](./docs/images/the-user-marks-the-sheet.png)
+
+Checkout tells the buyer the order is accepted while the capture is still pending. What if
+the capture never arrives?
+
+**3. The agent answers what you circled, by redrawing.**
+
+It gets the sheet back with your ink baked into it — not coordinates, the picture — so it
+knows what you pointed at. It redraws the exchange with an `Expiry` holding the order while
+the capture is pending, releasing the hold when the capture lands, and expiring the order
+and voiding the authorization when nothing lands in thirty minutes.
+
+That drawing is the plan: what the code will look like after you implement it, agreed
+before a single line exists.
+
+You speak in ink, the agent speaks in meaning, and neither writes on the other's side.
+Your circle never edits the diagram underneath, and the ink disappears when the answer
+arrives, because the redraw *is* the reply.
+
+**4. You write the code, and the whiteboard is gone.**
+
+Nothing was saved. No history, no export, no directory of stale diagrams to find six months
+from now, when the capture flow no longer looks like that
+([ADR 0011](./docs/adr/0011-the-mcp-session-rules.md)).
+
+## Install
+
+Two lines inside Claude Code:
 
 ```
 /plugin marketplace add https://raw.githubusercontent.com/javierponferradalopez/flipchart/main/marketplace.json
 /plugin install flipchart@flipchart
 ```
 
-And a third step that is **not optional**: paste this line into your `CLAUDE.md`.
+And a third step that is **not optional** — paste this into your `CLAUDE.md`:
 
 ```
 Explain in prose. Draw on the flipchart with mcp__plugin_flipchart_flipchart__show
@@ -32,52 +138,73 @@ I ask you to draw something.
 ```
 
 Without it the flipchart sits installed and never gets used: on its own initiative the
-agent never offers it —**0 out of 36 turns** measured
-([ADR 0012](./docs/adr/0012-the-trigger-lives-outside-the-binary.md))— and paints the graph
-in ASCII inside its answer.
+agent never reaches for the window — **0 out of 36 turns** measured
+([ADR 0012](./docs/adr/0012-the-trigger-lives-outside-the-binary.md)) — and paints the
+graph in ASCII instead.
 
-The line asks for **less** than the one measured in 0012, which drew on any explanation of a
-structure and so drew on almost every answer
-([ADR 0017](./docs/adr/0017-drawing-is-the-exception.md)). Prose is the default and the two
-cases are the whole list. If you would rather have a flipchart that volunteers more, add a
-third case — the wide 0012 wording is the only one with a measurement behind it.
+**Requirements:** a Claude Code with plugin support, on macOS 11 or later (Intel or Apple
+Silicon). **Nothing else**: no Node, no Python, no browser, no Rust toolchain. The window
+opens on the machine you are sitting at, so a remote or cloud agent cannot use it
+([ADR 0015](./docs/adr/0015-what-this-product-is-not.md)).
 
-The box also ships one skill, `choosing-the-family`, which the agent reaches on its own
-once it has decided to draw: which Mermaid family fits what it is explaining —a flowchart
-for structure, a sequence for an exchange over time, a class diagram for types— and the
-three lines that get a diagram rejected. It installs with the plugin and needs no line of
-yours ([ADR 0018](./docs/adr/0018-the-box-carries-one-skill.md)).
-
-That `mcp__plugin_flipchart_flipchart__show` is the name Claude Code presents the tool
-under when flipchart arrives as a plugin: the host composes the server name as
-`plugin:<plugin>:<server>`. Leave it as `mcp__flipchart__show` and you are naming a tool
-that does not exist.
-
-## Updating and uninstalling
+<details>
+<summary>Updating, uninstalling, and two names that bite</summary>
 
 ```
 /plugin update flipchart@flipchart
 /plugin uninstall flipchart@flipchart
 ```
 
-**The trailing `@flipchart` is not optional on `update`**: with the short name it answers
-`Plugin "flipchart" not found`, even though it is installed and `/plugin` lists it. What
-comes after the `@` is the marketplace, and it is called the same as the plugin. If you
-would rather not type names, `/plugin` opens the menu and does the same.
+The trailing `@flipchart` is **not optional on `update`**: with the short name it answers
+`Plugin "flipchart" not found` even though `/plugin` lists it. What comes after the `@` is
+the marketplace, which is called the same as the plugin. `/plugin` opens the menu and does
+the same without typing names.
+
+`mcp__plugin_flipchart_flipchart__show` is the name Claude Code presents the tool under
+when flipchart arrives as a plugin: the host composes the server name as
+`plugin:<plugin>:<server>`. Write `mcp__flipchart__show` in your `CLAUDE.md` and you are
+naming a tool that does not exist.
 
 `uninstall` takes the plugin's data with it, so there is no `rm -rf` to type. To turn it
-off without uninstalling it, `/plugin`.
+off without uninstalling, `/plugin`.
 
-## What it does and what it does not
+</details>
 
-What the flipchart does today —one sheet at a time, the window does not steal the keyboard,
-only the directed graph is tested, the style is its own— and what it will never do live in
-[`docs/adr/`](./docs/adr/), one decision per file with the measurement behind it. Start
-with [ADR 0015](./docs/adr/0015-what-this-product-is-not.md) and
-[ADR 0004](./docs/adr/0004-the-honest-limit.md).
+## What you can ask
 
-## Development
+You never pick a diagram type. You ask in your own words and the agent chooses the family
+from what it is explaining, with a skill that ships inside the plugin
+([ADR 0018](./docs/adr/0018-the-box-carries-one-skill.md)).
 
-The language of the domain is in [`CONTEXT.md`](./CONTEXT.md); the decisions, in
-[`docs/adr/`](./docs/adr/). How it is built, what the gate is and how it is published, in
-[`CLAUDE.md`](./CLAUDE.md).
+| What you ask, mid-implementation | What lands on the sheet |
+|:---|:---|
+| *"What happens when the provider retries the webhook?"* | the exchange over time, participant by participant |
+| *"What does the system look like after your plan?"* | the same exchange with the plan applied — a box you can reject now |
+| *"How does this flow work before I touch it?"* · *"What depends on what?"* | the graph in one glance, every edge drawn |
+| *"What states can an order be in once I add this?"* | the lifecycle, and what moves it between states |
+| *"What do these types look like?"* | the classes, their fields and their relations |
+| *"Which tables does this touch, and how do they relate?"* | the records and the relations between them |
+| *(you circle something on the sheet)* | the answer to what you circled, as a redraw |
+
+Today's flow and the plan can sit on the flipchart at the same time: several sheets coexist
+and the agent turns the page — one at a time, no index, no tab bar to manage
+([ADR 0009](./docs/adr/0009-one-sheet-no-index.md)).
+
+## How it works
+
+- **One process, no IPC.** A single native binary is both the MCP server and the window,
+  split across two threads ([ADR 0001](./docs/adr/0001-one-process-two-threads-no-ipc.md)).
+  It is not a web app in a window; there is no web app.
+- **Two tools, and only two.** `show` and `clear`, plus the marks coming back
+  ([ADR 0008](./docs/adr/0008-two-tools-and-only-two.md)).
+- **It refuses rather than lie.** Renderers invent nodes: hand one a typo and it
+  manufactures a box with a plausible label. This one checks the parsed graph against what
+  the agent wrote, and when the picture would show a node nobody declared it draws nothing
+  and says why ([ADR 0004](./docs/adr/0004-the-honest-limit.md)). What is seen in excess is
+  rejected; what is seen short is drawn and warned about — you never plan against an
+  invented box.
+- **Ephemeral on purpose.** The plan on the wall is true for as long as the session, which
+  is exactly as long as it is true in your head
+  ([ADR 0011](./docs/adr/0011-the-mcp-session-rules.md)).
+
+What it will never do is in [ADR 0015](./docs/adr/0015-what-this-product-is-not.md).
