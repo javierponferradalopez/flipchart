@@ -3,7 +3,7 @@
 use eframe::egui;
 use winit::platform::macos::{ActivationPolicy, EventLoopBuilderExtMacOS};
 
-use crate::mac::{bring_the_window_forward, put_the_logo_in_the_dock};
+use crate::mac::bring_the_window_forward;
 mod glass;
 mod raster;
 mod zoom;
@@ -13,6 +13,16 @@ use self::raster::{Rasterizer, Rendered, Scale};
 use self::zoom::{MINIMUM_ZOOM, Zoom};
 use crate::wire::{Command, Commands, DeckSnapshot, Ink};
 
+const LOGO: &[u8] = include_bytes!("../assets/logo.png");
+
+/// Apple's icon grid, measured on the neighbours in the Dock: the artwork takes
+/// 824 of the 1024 px canvas —Slack, Brave and Preview agree to the pixel— and
+/// what is left is transparent margin. The logo fills its own canvas edge to
+/// edge, which is what the README wants of it, so the margin is put on here and
+/// not baked into the artwork: handed over without it the icon comes out a
+/// fifth bigger than every icon beside it.
+const ARTWORK_OF_THE_CANVAS: f32 = 824.0 / 1024.0;
+
 /// Deferred start: the main thread stays on the channel and does not create the
 /// event loop —nor the 97 MB it costs— until the agent asks for the first
 /// drawing.
@@ -20,11 +30,8 @@ pub fn open_at_the_first_show(commands: Commands) {
     let Some(first) = wait_for_the_first_show(&commands) else {
         return;
     };
-    put_the_logo_in_the_dock();
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_title(title())
-            .with_inner_size([1200.0, 800.0]),
+        viewport: viewport(),
         // The move up from `Accessory` to `Regular` happens when the event loop
         // is built, which is exactly the first `show`. It has to be here and not
         // later: measured, an app that was born accessory never activates
@@ -56,6 +63,42 @@ fn wait_for_the_first_show(commands: &Commands) -> Option<DeckSnapshot> {
             Command::Show(_) => {}
             Command::SessionOver => return None,
         }
+    }
+}
+
+/// The logo is handed to `eframe` and not set on `NSApplication` ourselves:
+/// the icon a Mac reads off disk comes from an `.app` bundle's `Info.plist` and
+/// what the plugin ships is a bare executable
+/// (docs/adr/0013-the-plugin-is-the-only-install-path.md), so it has to be
+/// handed over at runtime, and `eframe` is the one who hands it over — every
+/// frame until it takes. Measured: setting it ourselves before the event loop
+/// gets overwritten on the first frame by **egui's own logo**, which is what
+/// `eframe` falls back to when the viewport carries no icon.
+fn viewport() -> egui::ViewportBuilder {
+    let viewport = egui::ViewportBuilder::default()
+        .with_title(title())
+        .with_inner_size([1200.0, 800.0]);
+    match eframe::icon_data::from_png_bytes(LOGO) {
+        Ok(logo) => viewport.with_icon(with_the_margin_the_dock_expects(logo)),
+        Err(_) => viewport,
+    }
+}
+
+fn with_the_margin_the_dock_expects(artwork: egui::IconData) -> egui::IconData {
+    let side = (artwork.width.max(artwork.height) as f32 / ARTWORK_OF_THE_CANVAS).round() as u32;
+    let left = (side - artwork.width) / 2;
+    let top = (side - artwork.height) / 2;
+    let stride = (artwork.width * 4) as usize;
+    let mut rgba = vec![0; (side * side * 4) as usize];
+    for row in 0..artwork.height {
+        let from = (row * artwork.width * 4) as usize;
+        let onto = (((top + row) * side + left) * 4) as usize;
+        rgba[onto..onto + stride].copy_from_slice(&artwork.rgba[from..from + stride]);
+    }
+    egui::IconData {
+        width: side,
+        height: side,
+        rgba,
     }
 }
 
