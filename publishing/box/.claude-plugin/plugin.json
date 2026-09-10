@@ -1,5 +1,5 @@
 {
   "name": "flipchart",
   "description": "A native window where the agent draws what it is explaining: Mermaid diagrams, one sheet at a time, gone with the session",
-  "version": "0.2.2"
+  "version": "0.2.3"
 }
