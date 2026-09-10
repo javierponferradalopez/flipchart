@@ -6,11 +6,11 @@
     {
       "name": "flipchart",
       "description": "A native window where the agent draws what it is explaining: Mermaid diagrams, one sheet at a time, gone with the session",
-      "version": "0.2.2",
+      "version": "0.2.3",
       "source": {
         "source": "archive",
-        "url": "https://github.com/javierponferradalopez/flipchart/releases/download/v0.2.2/flipchart-0.2.2.zip",
-        "sha256": "63b28516b58be35c6e19256011de08f640f16a860b33ce8c97f18db08baf9f58"
+        "url": "https://github.com/javierponferradalopez/flipchart/releases/download/v0.2.3/flipchart-0.2.3.zip",
+        "sha256": "db1e804561e51b69b3873645e6b2d30444dde2d468f98d736f0a3139b342ce6d"
       }
     }
   ]
