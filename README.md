@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="./assets/logo.png" alt="The flipchart logo" width="128">
+
 # flipchart
 
 **Before you write the code, the agent shows you the flow — and what its plan leaves
