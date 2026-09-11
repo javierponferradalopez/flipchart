@@ -11,7 +11,7 @@ draw back.**
 A **Claude Code plugin for macOS** — an ephemeral visual channel for your agent.
 One native binary, two lines to install.
 
-[The problem](#the-problem) · [When it earns its place](#when-it-earns-its-place) · [A session](#a-session) · [Install](#install) · [What you can ask](#what-you-can-ask) · [How it works](#how-it-works)
+[The problem](#the-problem) · [When it earns its place](#when-it-earns-its-place) · [A session](#a-session) · [Install](#install) · [What you can ask](#what-you-can-ask) · [How it works](#how-it-works) · [What it is made of](#what-it-is-made-of)
 
 </div>
 
@@ -210,3 +210,26 @@ and the agent turns the page — one at a time, no index, no tab bar to manage
   ([ADR 0011](./docs/adr/0011-the-mcp-session-rules.md)).
 
 What it will never do is in [ADR 0015](./docs/adr/0015-what-this-product-is-not.md).
+
+## What it is made of
+
+Four things, and no browser anywhere.
+
+- **Rust, in one native binary.** The MCP server and the window are the same executable,
+  universal for Intel and Apple Silicon. Nothing else arrives with it and nothing else has
+  to be on the machine.
+- **MCP over stdio.** The host launches the binary as a child process and talks to it on
+  its standard input. That is the entire interface the agent gets: two tools and the marks
+  coming back.
+- **Mermaid, parsed and laid out in Rust.** Mermaid normally means a browser — a headless
+  Chromium, a Node process, a JavaScript renderer. Here the text is parsed, the geometry
+  is decided and the picture is written without leaving the process
+  ([ADR 0002](./docs/adr/0002-mermaid-as-the-language.md),
+  [ADR 0003](./docs/adr/0003-one-layout-engine-pinned.md)).
+- **A sheet painted, not embedded.** The drawing is rasterised in Rust, with the fonts
+  already on the machine, and put on the glass of a native macOS window. No web view, no
+  HTML, no JavaScript engine behind the picture — and the ink you draw on top never
+  touches it ([ADR 0016](./docs/adr/0016-the-return-channel.md)).
+
+Which crates do which is the twenty lines of [`Cargo.toml`](./Cargo.toml). They are few on
+purpose: each one is paid for in the megabytes the user downloads to install a plugin.
