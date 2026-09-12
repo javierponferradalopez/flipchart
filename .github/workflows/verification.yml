@@ -6,9 +6,49 @@ on:
   pull_request:
 
 jobs:
+  # The two Machines of ADR-0019, and both have to pass: a Linux-only
+  # regression shipping is the whole reason this stopped being one runner.
+  # `ubuntu-22.04` and not the newest on purpose — it is the oldest GitHub
+  # hosts, and its glibc 2.35 is the floor the published binary is built
+  # against, so the Machine that verifies is the Machine that sets the floor.
+  #
+  # `fail-fast` is off because the news worth having is *which* Machine broke,
+  # and a job cancelled mid-run does not say.
   verify:
-    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        machine: [macos-latest, ubuntu-22.04]
+    runs-on: ${{ matrix.machine }}
     steps:
       - uses: actions/checkout@v4
       - uses: Swatinem/rust-cache@v2
-      - run: make verify
+
+      - name: verify
+        if: runner.os == 'macOS'
+        run: make verify
+
+      # Measured on a bare `ubuntu:22.04`: with no display `eframe` cannot
+      # create the event loop, `viewer.rs` discards that error, `main` returns
+      # and the process exits — taking the MCP server with it, after the agent
+      # has been told the `show` succeeded. Every test that says anything after
+      # a `show` then reads EOF where an answer should be, and the two that only
+      # sometimes do it in time make the failure look intermittent.
+      #
+      # So the runner is given the display it lacks. The Flipchart process
+      # surviving *without* one is a separate promise, made in ADR-0019 and not
+      # kept yet; this is the display, not the promise. `xvfb` on its own is
+      # enough — measured with `libgl1-mesa-dri` and `mesa-vulkan-drivers`
+      # purged, the seventeen protocol tests still pass.
+      #
+      # macOS needs none of this: there is a window server wherever a user is
+      # logged in.
+      - name: a display for the tests that draw
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends xvfb
+
+      - name: verify, under a virtual display
+        if: runner.os == 'Linux'
+        run: xvfb-run -a make verify
