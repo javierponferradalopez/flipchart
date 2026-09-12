@@ -1,4 +1,5 @@
 use eframe::EventLoopBuilderHook;
+use eframe::egui;
 use objc2::MainThreadMarker;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -46,7 +47,12 @@ pub fn prepare_the_event_loop() -> Option<EventLoopBuilderHook> {
 /// It only takes hold on a window the system already has mounted: called before
 /// the first frame, the window stays **behind** the terminal. The one who waits
 /// for that frame is the Viewer.
-pub fn bring_the_window_forward() {
+///
+/// The context is the Linux Machine's handle on its window and this one reaches
+/// its own through `NSApplication`, so here it is taken and not used: the
+/// phrase is the same on every Machine, and what it costs is one ignored
+/// argument.
+pub fn bring_the_window_forward(_ctx: &egui::Context) {
     if let Some(window) = the_window() {
         window.orderFrontRegardless();
     }

@@ -431,7 +431,7 @@ impl eframe::App for Viewer {
         }
 
         if self.window.born() {
-            bring_the_window_forward();
+            bring_the_window_forward(ctx);
         } else if self.window.waiting_to_be_born() {
             ctx.request_repaint();
         }
