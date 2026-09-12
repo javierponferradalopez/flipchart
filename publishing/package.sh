@@ -89,8 +89,13 @@ done
 # leaves the plugin with no way to install. The margin is enormous today and
 # what eats it are the dependencies, which is exactly what nobody looks at when
 # adding one.
+#
+# The size is read with `wc -c` and not with `stat`, which is two different
+# programs —`-f %z` on BSD, `-c %s` on GNU— and this script is run by
+# `tests/box.rs` on both Machines. The arithmetic expansion is what drops the
+# padding BSD `wc` writes in front of the number.
 readonly ARCHIVE_CEILING=$((256 * 1024 * 1024))
-bytes=$(stat -f %z "$ZIP")
+bytes=$(($(wc -c <"$ZIP")))
 [ "$bytes" -le "$ARCHIVE_CEILING" ] \
   || die "the zip is $bytes bytes and the archive ceiling is $ARCHIVE_CEILING, with no valve"
 
