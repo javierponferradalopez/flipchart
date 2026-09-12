@@ -26,6 +26,12 @@ The program the agent runs inside, and which launches the Flipchart process as a
 and talks to it over stdio.
 _Avoid_: IDE, editor, Claude Code — the term is the role, not one product
 
+**Machine**:
+The computer the Flipchart process runs on, and what decides which binary can run at all.
+_Avoid_: platform, OS, system — the Host is the program that launches us, and «the system
+decides how it looks» is the Flipchart
+_Why_: [0019](./docs/adr/0019-two-machines-one-box.md)
+
 ### The channel
 
 **Flipchart** — `flipchart` in code:
@@ -154,9 +160,10 @@ _Why_: [0001](./docs/adr/0001-one-process-two-threads-no-ipc.md)
 
 **Launcher** — `launcher.sh` in code:
 What the Host invokes so that the Flipchart process exists. It does not bring the
-executable, only makes it usable — and it never fails.
+executables: it chooses the one this Machine can run and makes it usable — and it never
+fails.
 _Avoid_: installer, wrapper, shim, startup script
-_Why_: [0013](./docs/adr/0013-the-plugin-is-the-only-install-path.md), [0014](./docs/adr/0014-the-launcher-never-fails.md)
+_Why_: [0013](./docs/adr/0013-the-plugin-is-the-only-install-path.md), [0014](./docs/adr/0014-the-launcher-never-fails.md), [0019](./docs/adr/0019-two-machines-one-box.md)
 
 **Unavailable server**:
 The Launcher's face when there is no Flipchart process to hand its place over to. It

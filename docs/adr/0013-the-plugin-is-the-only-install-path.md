@@ -1,6 +1,6 @@
 # The plugin is the only install path: a verified zip, no git
 
-**Status:** accepted · **Date:** 2026-09-03 · **Refined by** [0018](./0018-the-box-carries-one-skill.md)
+**Status:** accepted · **Date:** 2026-09-03 · **Refined by** [0018](./0018-the-box-carries-one-skill.md), [0019](./0019-two-machines-one-box.md)
 
 **A Claude Code plugin, and it is the only install path.** The binary is still an ordinary
 MCP server over stdio —free by construction— but it **is not documented, not tested and not
@@ -15,6 +15,12 @@ menu is product surface promising a control over the flipchart that the user doe
 above is what it had to answer: that skill owns nothing —it does not trigger the flipchart—
 and it fires on a decision the agent has already taken. The box stays closed against
 anything that would claim the trigger.*
+
+*[0019](./0019-two-machines-one-box.md) adds a sixth, and it is the same binary again for
+another Machine: `flipchart-macos` and `flipchart-linux-x86_64` travel together and the
+Launcher chooses between them. It has to be this way and not two catalog entries, because —as
+[0014](./0014-the-launcher-never-fails.md) measured— a marketplace entry has no platform field
+at all. The box is still closed: six files, copied one by one.*
 
 ## The vehicle: a verified zip, and zero git on the client
 
@@ -98,10 +104,15 @@ the catalog — **a private or authenticated asset is impossible by this route**
 6. Generate the `marketplace.json` from the tag, upload the zip as a release asset and commit
    the JSON to `main`.
 
+*[0019](./0019-two-machines-one-box.md) puts a step before the first: an `ubuntu-22.04` job
+builds the Linux binary natively and uploads it as an artifact, which the macOS job picks up
+before packing. Packing stays on macOS, which is where `lipo` and `codesign` are, and the two
+steps that treat the Apple slices are untouched.*
+
 The six steps live in `.github/workflows/publishing.yml`, triggered by the tag and by
 nothing else. The two with rules of their own are separate scripts, which is why they can be
 tested without publishing anything: `publishing/package.sh` builds the box and closes it
-—copying the four files one by one, so there is nowhere to slip a fifth in— and
+—copying the files one by one, so there is nowhere to slip one more in— and
 `publishing/catalog.sh` generates the catalog from the tag. Both **refuse** if the tag's
 version is not the one declared by the manifest they are about to publish; `tests/box.rs` is
 what has that measured on every `make verify`.
@@ -158,10 +169,16 @@ both, which is the one that always works.
   from AppKit and Foundation —`beginActivityWithOptions:reason:`, `setActivationPolicy:`,
   `orderFrontRegardless`— are from 10.9 and earlier. **What has not been measured, and is
   written as such: running it on a macOS older than the bank's 26.6.2.**
+- **Linux `x86_64`, glibc 2.35 or later** ([0019](./0019-two-machines-one-box.md)). The floor is
+  the `ubuntu-22.04` runner's, which is the oldest GitHub hosts, and below it the loader will not
+  start the binary — so the Launcher probes before handing over, and what the User reads is a
+  sentence and not `✘ failed`. One binary serves X11 and Wayland: `winit` reaches each through
+  `dlopen`, so neither is linked. A session with **no display** —over SSH, in a container— gets
+  the Unavailable server, because there the window cannot exist at all.
 - A version of Claude Code with plugin support.
 - **No Node, no Python, no browser, no Rust toolchain.**
 
-**Linux and Windows are not declared impossible: they are declared untested and unpromised.**
+**Windows is not declared impossible: it is declared untested and unpromised.**
 
 ## Considered options
 
