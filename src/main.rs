@@ -6,7 +6,6 @@ use flipchart::{
     check, keep_awake_while_the_session_lasts, open_at_the_first_show, serve, stay_out_of_the_dock,
     wire,
 };
-use objc2::MainThreadMarker;
 
 fn main() -> ExitCode {
     let arguments: Vec<String> = env::args().skip(1).collect();
@@ -28,7 +27,7 @@ fn main() -> ExitCode {
 
 fn flipchart() {
     let _activity = keep_awake_while_the_session_lasts();
-    stay_out_of_the_dock(MainThreadMarker::new().expect("main() runs on the main thread"));
+    stay_out_of_the_dock();
 
     let (viewer, commands) = wire();
     thread::spawn(move || serve(viewer));

@@ -1,9 +1,8 @@
 //! The Viewer: the flipchart that shows the sheet the agent put at the front.
 
 use eframe::egui;
-use winit::platform::macos::{ActivationPolicy, EventLoopBuilderExtMacOS};
 
-use crate::mac::bring_the_window_forward;
+use crate::machine::{bring_the_window_forward, prepare_the_event_loop};
 mod glass;
 mod raster;
 mod zoom;
@@ -32,21 +31,7 @@ pub fn open_at_the_first_show(commands: Commands) {
     };
     let options = eframe::NativeOptions {
         viewport: viewport(),
-        // The move up from `Accessory` to `Regular` happens when the event loop
-        // is built, which is exactly the first `show`. It has to be here and not
-        // later: measured, an app that was born accessory never activates
-        // —neither by changing the policy nor ten frames later— and the window
-        // appears behind the terminal while the agent says it has drawn.
-        //
-        // And what `winit` does on its own at startup has to be disarmed:
-        // `activateIgnoringOtherApps(true)`, which **steals the keyboard
-        // mid-sentence** before anyone else gets a say. That is the real thief —
-        // without this line, putting the window in front without activating the
-        // app changes nothing.
-        event_loop_builder: Some(Box::new(|builder| {
-            builder.with_activation_policy(ActivationPolicy::Regular);
-            builder.with_activate_ignoring_other_apps(false);
-        })),
+        event_loop_builder: prepare_the_event_loop(),
         ..Default::default()
     };
     let _ = eframe::run_native(
