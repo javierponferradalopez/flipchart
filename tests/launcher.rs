@@ -48,6 +48,14 @@ impl PluginBox {
     /// The `chmod` that cannot: a read-only file system cannot be mounted
     /// inside a test, and `chflags uchg` reproduces it just the same —not even
     /// the owner can change its permissions—.
+    ///
+    /// macOS only, and the state is not the Machine's: a binary on a read-only
+    /// mount is as real on Linux. What Linux has no unprivileged way to do is
+    /// **reach** it from inside a test — `chattr +i` needs root, and taking
+    /// write permission off the directory does not stop the owner's `chmod`.
+    /// So this one is measured where it can be measured, rather than deleted to
+    /// make the other Machine green.
+    #[cfg(target_os = "macos")]
     fn with_a_binary_that_cannot_be_fixed() -> Self {
         let plugin = Self::empty("unfixable");
         fs::write(plugin.binary(), "").expect("the fake binary is written");
@@ -84,6 +92,7 @@ impl PluginBox {
         self.path.join("flipchart")
     }
 
+    #[cfg(target_os = "macos")]
     fn chflags(&self, flags: &str) {
         let set = Command::new("chflags")
             .args(["-R", flags])
@@ -101,6 +110,7 @@ impl PluginBox {
 
 impl Drop for PluginBox {
     fn drop(&mut self) {
+        #[cfg(target_os = "macos")]
         self.chflags("nouchg");
         let _ = fs::remove_dir_all(&self.path);
     }
@@ -362,6 +372,7 @@ fn with_a_binary_of_another_architecture_the_warning_says_this_machine_will_not_
     );
 }
 
+#[cfg(target_os = "macos")]
 #[test]
 fn with_a_binary_that_cannot_be_fixed_the_warning_says_there_is_no_execute_permission() {
     let plugin = PluginBox::with_a_binary_that_cannot_be_fixed();
