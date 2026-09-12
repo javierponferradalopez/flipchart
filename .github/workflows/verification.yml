@@ -29,25 +29,24 @@ jobs:
         run: make verify
 
       # Measured on a bare `ubuntu:22.04`: with no display `eframe` cannot
-      # create the event loop, `viewer.rs` discards that error, `main` returns
-      # and the process exits — taking the MCP server with it, after the agent
-      # has been told the `show` succeeded. Every test that says anything after
-      # a `show` then reads EOF where an answer should be, and the two that only
-      # sometimes do it in time make the failure look intermittent.
+      # create the event loop. That failure no longer ends the session —
+      # ADR-0019's park keeps the MCP server answering, and `tests/lifecycle.rs`
+      # measures it by taking the display away from a process on purpose — but
+      # the rest of the suite is here to see the flipchart draw, and drawing
+      # wants a display.
       #
-      # So the runner is given the display it lacks. The Flipchart process
-      # surviving *without* one is a separate promise, made in ADR-0019 and not
-      # kept yet; this is the display, not the promise. `xvfb` on its own is
-      # enough — measured with `libgl1-mesa-dri` and `mesa-vulkan-drivers`
-      # purged, the seventeen protocol tests still pass.
+      # So the runner is given one, and a renderer to go with it:
+      # `eframe`'s default renderer is **wgpu**, which asks for a Vulkan driver,
+      # and `mesa-vulkan-drivers` brings lavapipe — one in software. Honest
+      # limit: lavapipe proves wgpu can start, not that a real driver will.
       #
       # macOS needs none of this: there is a window server wherever a user is
       # logged in.
-      - name: a display for the tests that draw
+      - name: a display and a renderer for the tests that draw
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends xvfb
+          sudo apt-get install -y --no-install-recommends xvfb mesa-vulkan-drivers
 
       - name: verify, under a virtual display
         if: runner.os == 'Linux'
