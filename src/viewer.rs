@@ -34,11 +34,34 @@ pub fn open_at_the_first_show(commands: Commands) {
         event_loop_builder: prepare_the_event_loop(),
         ..Default::default()
     };
-    let _ = eframe::run_native(
+    if eframe::run_native(
         "flipchart",
         options,
         Box::new(move |cc| Ok(Box::new(Viewer::new(cc, commands, first)))),
-    );
+    )
+    .is_err()
+    {
+        park_so_the_server_keeps_answering();
+    }
+}
+
+/// The event loop could not be created —no display, over SSH or in a container—
+/// and the Agent has already been told the `show` succeeded. Discarding that
+/// error returned from here, returned from `main`, and **took the MCP server
+/// down with it**, leaving the Agent without tools mid-conversation.
+///
+/// So the main thread has nothing left to do and does the one thing that keeps
+/// the promise: nothing at all. It never ends the process either — the server
+/// thread is the only one that knows when the session is over (ADR-0011) and it
+/// is the one that exits.
+///
+/// **The gap this leaves, stated** (ADR-0019): a parked process still accepts
+/// `show` calls that draw nothing. Carrying that news back in the tool result
+/// is a change to the tool contract, and it is not made here.
+fn park_so_the_server_keeps_answering() -> ! {
+    loop {
+        std::thread::park();
+    }
 }
 
 fn wait_for_the_first_show(commands: &Commands) -> Option<DeckSnapshot> {
