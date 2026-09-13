@@ -12,13 +12,50 @@ use serde_json::{Value, json};
 
 const LAUNCHER: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/launcher.sh");
 
+/// The two names the box carries, read from the Machine the suite is running
+/// on: the Launcher chooses one of them and never looks at the other, so which
+/// is which is what these tests are about.
+///
+/// A third Machine has no name here for the same reason it has no
+/// `src/machine` module: nothing is published for it, and the box would carry
+/// nothing for it either.
+#[cfg(target_os = "macos")]
+const THE_BINARY_OF_THIS_MACHINE: &str = "flipchart-macos";
+#[cfg(target_os = "macos")]
+const THE_BINARY_OF_THE_OTHER_MACHINE: &str = "flipchart-linux-x86_64";
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+const THE_BINARY_OF_THIS_MACHINE: &str = "flipchart-linux-x86_64";
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+const THE_BINARY_OF_THE_OTHER_MACHINE: &str = "flipchart-macos";
+
+#[cfg(not(any(target_os = "macos", all(target_os = "linux", target_arch = "x86_64"))))]
+compile_error!(
+    "The box carries no binary for this Machine, so there is no name here for \
+     the Launcher to choose. Publishing one means reading docs/adr/0019, which \
+     says what x86_64-only costs and who it leaves out."
+);
+
 /// Five seconds is a test deadline, not the product's: the Launcher promises
 /// milliseconds, and what this deadline buys is that a silent Launcher fails
 /// instead of hanging the suite.
 const DEADLINE: Duration = Duration::from_secs(5);
 
+/// A directory of its own for each piece of scenery, named after what it is
+/// for so a leftover from a failed run says where it came from.
+fn a_directory_for(what: &str) -> PathBuf {
+    static NEXT: AtomicU32 = AtomicU32::new(0);
+    let path = std::env::temp_dir().join(format!(
+        "flipchart-{what}-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    fs::create_dir_all(&path).expect("the directory can be created");
+    path
+}
+
 /// The plugin directory exactly as the host leaves it: the binary next to the
-/// Launcher, in one of its four states.
+/// Launcher, in one of its states.
 struct PluginBox {
     path: PathBuf,
 }
@@ -26,6 +63,18 @@ struct PluginBox {
 impl PluginBox {
     fn without_a_binary() -> Self {
         Self::empty("missing")
+    }
+
+    /// The box as it reaches the Machine it was not built for: both names
+    /// travel in it, and the one this Machine would run is the one missing.
+    fn with_only_the_other_machines_binary() -> Self {
+        let plugin = Self::empty("the-other-machine");
+        fs::write(
+            plugin.path.join(THE_BINARY_OF_THE_OTHER_MACHINE),
+            "a binary for the other Machine",
+        )
+        .expect("the other Machine's binary is written");
+        plugin
     }
 
     /// The real binary, symlinked instead of copied: what is measured is that
@@ -78,18 +127,13 @@ impl PluginBox {
     }
 
     fn empty(state: &str) -> Self {
-        static NEXT: AtomicU32 = AtomicU32::new(0);
-        let path = std::env::temp_dir().join(format!(
-            "flipchart-launcher-{}-{state}-{}",
-            std::process::id(),
-            NEXT.fetch_add(1, Ordering::Relaxed)
-        ));
-        fs::create_dir_all(&path).expect("the plugin box can be created");
-        Self { path }
+        Self {
+            path: a_directory_for(&format!("launcher-{state}")),
+        }
     }
 
     fn binary(&self) -> PathBuf {
-        self.path.join("flipchart")
+        self.path.join(THE_BINARY_OF_THIS_MACHINE)
     }
 
     #[cfg(target_os = "macos")]
@@ -116,6 +160,52 @@ impl Drop for PluginBox {
     }
 }
 
+/// A Machine other than the one running the suite, which is the only way to
+/// reach the Users the box carries nothing for: ARM Linux, and everything else.
+///
+/// `uname` is the whole of what the Launcher asks about the Machine, and it is
+/// POSIX and comes off the `PATH` — so answering it is standing at the
+/// Machine's own boundary, not at anything of ours.
+struct Machine {
+    path: PathBuf,
+}
+
+impl Machine {
+    fn that_says_it_is(system: &str, architecture: &str) -> Self {
+        let path = a_directory_for("machine");
+        let uname = path.join("uname");
+        fs::write(
+            &uname,
+            format!(
+                "#!/bin/bash\ncase $1 in\n  -s) echo {system} ;;\n  -m) echo {architecture} ;;\nesac\n"
+            ),
+        )
+        .expect("the uname of another Machine is written");
+        fs::set_permissions(&uname, fs::Permissions::from_mode(0o755))
+            .expect("the uname of another Machine can be made executable");
+        Self { path }
+    }
+
+    fn launcher(&self) -> Command {
+        let mut launcher = Command::new(LAUNCHER);
+        launcher.env(
+            "PATH",
+            format!(
+                "{}:{}",
+                self.path.display(),
+                std::env::var("PATH").unwrap_or_default()
+            ),
+        );
+        launcher
+    }
+}
+
+impl Drop for Machine {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.path);
+    }
+}
+
 /// The Launcher started the way the host starts it: over stdio and with the
 /// plugin box in `CLAUDE_PLUGIN_ROOT`.
 struct Session {
@@ -128,7 +218,14 @@ struct Session {
 
 impl Session {
     fn open(plugin: &PluginBox) -> Self {
-        let mut session = Self::raw(&plugin.path);
+        Self::handshake(Self::raw(Command::new(LAUNCHER), &plugin.path))
+    }
+
+    fn open_on(plugin: &PluginBox, machine: &Machine) -> Self {
+        Self::handshake(Self::raw(machine.launcher(), &plugin.path))
+    }
+
+    fn handshake(mut session: Self) -> Self {
         session.greeting = session.request(
             "initialize",
             json!({
@@ -141,8 +238,8 @@ impl Session {
         session
     }
 
-    fn raw(root: &Path) -> Self {
-        let mut process = Command::new(LAUNCHER)
+    fn raw(mut launcher: Command, root: &Path) -> Self {
+        let mut process = launcher
             .env("CLAUDE_PLUGIN_ROOT", root)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -366,10 +463,68 @@ fn with_a_binary_of_another_architecture_the_warning_says_this_machine_will_not_
     assert_eq!(
         the_warning_of(&mut session),
         "The flipchart is not available in this session and cannot draw anything: this machine \
-         refused to execute the flipchart binary, which is a macOS build - another platform or \
-         architecture cannot run it. Nothing will appear on screen, so do not offer the user a \
-         diagram - explain in prose instead. Reinstalling the plugin is what brings it back."
+         refused to execute the flipchart binary the box carries for it. Nothing will appear on \
+         screen, so do not offer the user a diagram - explain in prose instead. Reinstalling the \
+         plugin is what brings it back."
     );
+}
+
+/// The choice, measured from the side it has to refuse: the box carries the
+/// other Machine's binary and the Launcher does not reach for it.
+#[test]
+fn the_binary_of_the_other_machine_is_not_one_this_one_can_start() {
+    let plugin = PluginBox::with_only_the_other_machines_binary();
+    let mut session = Session::open(&plugin);
+
+    assert_eq!(session.names_of_its_tools(), ["unavailable"]);
+}
+
+#[test]
+fn on_a_machine_with_no_binary_the_handshake_is_answered_in_milliseconds() {
+    let plugin = PluginBox::with_the_good_binary();
+    let arm_linux = Machine::that_says_it_is("Linux", "aarch64");
+
+    let start = Instant::now();
+    let _session = Session::open_on(&plugin, &arm_linux);
+
+    assert!(start.elapsed() < Duration::from_secs(2));
+}
+
+#[test]
+fn on_a_machine_with_no_binary_it_announces_a_single_tool() {
+    let plugin = PluginBox::with_the_good_binary();
+    let arm_linux = Machine::that_says_it_is("Linux", "aarch64");
+    let mut session = Session::open_on(&plugin, &arm_linux);
+
+    assert_eq!(session.names_of_its_tools(), ["unavailable"]);
+}
+
+/// What was found, said out loud: without it the User reads that something is
+/// wrong and goes looking for the fault in their own setup, where it is not.
+#[test]
+fn on_a_machine_with_no_binary_the_warning_names_what_was_found() {
+    let plugin = PluginBox::with_the_good_binary();
+    let arm_linux = Machine::that_says_it_is("Linux", "aarch64");
+    let mut session = Session::open_on(&plugin, &arm_linux);
+
+    assert_eq!(
+        the_warning_of(&mut session),
+        "The flipchart is not available in this session and cannot draw anything: the box carries \
+         no flipchart binary for this machine, which is Linux aarch64. Nothing will appear on \
+         screen, so do not offer the user a diagram - explain in prose instead. Reinstalling the \
+         plugin is what brings it back."
+    );
+}
+
+#[test]
+fn on_a_machine_with_no_binary_it_exits_with_zero_when_its_input_is_closed() {
+    let plugin = PluginBox::with_the_good_binary();
+    let arm_linux = Machine::that_says_it_is("Linux", "aarch64");
+    let mut session = Session::open_on(&plugin, &arm_linux);
+
+    session.closes_its_input();
+
+    assert_eq!(session.exits_before(DEADLINE).code(), Some(0));
 }
 
 #[cfg(target_os = "macos")]

@@ -15,17 +15,37 @@
 
 trap 'exit 0' INT TERM HUP
 
-readonly BINARY="${CLAUDE_PLUGIN_ROOT:-$(dirname "$0")}/flipchart"
+readonly BOX="${CLAUDE_PLUGIN_ROOT:-$(dirname "$0")}"
+
+# The box carries a binary per Machine and the choice lives here, because there
+# is nowhere else for it: measured in ADR-0014, a marketplace entry has no `os`,
+# no `platform`, no `arch` and no `requires`, so the catalog cannot route
+# anybody anywhere. `uname` is POSIX, and the macOS binary is a universal
+# Mach-O, which is why no Darwin is asked what architecture it is.
+readonly SYSTEM=$(uname -s 2>/dev/null)
+readonly ARCHITECTURE=$(uname -m 2>/dev/null)
+case "$SYSTEM $ARCHITECTURE" in
+  'Darwin '*) BINARY="$BOX/flipchart-macos" ;;
+  'Linux x86_64') BINARY="$BOX/flipchart-linux-x86_64" ;;
+  *) BINARY= ;;
+esac
+readonly BINARY
 
 readonly MISSING='the flipchart binary is not in the plugin directory'
 readonly UNRUNNABLE='the flipchart binary could not be given execute permission'
-readonly FOREIGN='this machine refused to execute the flipchart binary, which is a macOS build - another platform or architecture cannot run it'
+readonly FOREIGN='this machine refused to execute the flipchart binary the box carries for it'
+# What was found is named: the box carries no binary for this Machine, which is
+# not a fault in the user's setup and would be looked for there otherwise.
+readonly ELSEWHERE="the box carries no flipchart binary for this machine, which is $SYSTEM $ARCHITECTURE"
 
 # A backstop, not the mechanism: the host preserves the 0755 from the Info-ZIP
-# zip, but nobody promises it in its schema.
-chmod +x "$BINARY" 2>/dev/null
+# zip, but nobody promises it in its schema. It applies to the chosen binary,
+# which is the only one this Machine is ever going to run.
+[ -n "$BINARY" ] && chmod +x "$BINARY" 2>/dev/null
 
-if [ ! -e "$BINARY" ]; then
+if [ -z "$BINARY" ]; then
+  DIAGNOSIS=$ELSEWHERE
+elif [ ! -e "$BINARY" ]; then
   DIAGNOSIS=$MISSING
 elif [ ! -x "$BINARY" ]; then
   DIAGNOSIS=$UNRUNNABLE
