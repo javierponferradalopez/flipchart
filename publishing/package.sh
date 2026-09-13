@@ -1,8 +1,12 @@
 #!/bin/bash
-# Packs the box: the five files of ADR-0013 and ADR-0018 and nothing else, into
-# an Info-ZIP zip, and writes the path of the zip to stdout.
+# Packs the box: the six files of ADR-0013, ADR-0018 and ADR-0019 and nothing
+# else, into an Info-ZIP zip, and writes the path of the zip to stdout.
 #
-#   package.sh <version-or-tag> <binary> <destination>
+#   package.sh <version-or-tag> <macos-binary> <linux-binary> <destination>
+#
+# Both binaries travel in the same box because a marketplace entry has no
+# platform field at all, so nothing upstream of the Launcher can route a user to
+# the one their Machine runs (ADR-0019).
 #
 # Info-ZIP (`zip`) is part of the contract, not a convenience: it is the packer
 # that writes `version made by == 3` with the Unix modes intact, and that is
@@ -32,12 +36,16 @@ the_version_in_cargo_toml() {
   printf '%s' "${line%%\"*}"
 }
 
-[ $# -eq 3 ] || die 'usage: package.sh <version-or-tag> <binary> <destination>'
+[ $# -eq 4 ] || die \
+  'usage: package.sh <version-or-tag> <macos-binary> <linux-binary> <destination>'
 readonly VERSION=${1#v}
-readonly BINARY=$2
-readonly DESTINATION=$3
+readonly MACOS_BINARY=$2
+readonly LINUX_BINARY=$3
+readonly DESTINATION=$4
 
-[ -f "$BINARY" ] || die "there is no binary at $BINARY"
+for binary in "$MACOS_BINARY" "$LINUX_BINARY"; do
+  [ -f "$binary" ] || die "there is no binary at $binary"
+done
 
 # The version that rules is the one in the `plugin.json` inside the zip —the
 # `/plugin` UI does `manifest.version ?? "unknown"`—, and the tag's is the one
@@ -50,22 +58,23 @@ declared=$(field version "$(grep -m1 '"version"' "$ROOT/$MANIFEST")") \
 from_cargo=$(the_version_in_cargo_toml)
 [ "$from_cargo" = "$VERSION" ] || die "Cargo.toml declares $from_cargo and the tag says $VERSION"
 
-# The five files are copied one by one and there is no `cp -R` of a whole
+# The six files are copied one by one and there is no `cp -R` of a whole
 # directory, which is what would let in a `.DS_Store` from the working tree or a
 # second skill someone added along the way. The box is closed —four files by
-# ADR-0013, the one skill of ADR-0018— so there is no need to check that it is:
-# there is no way in for a sixth file.
+# ADR-0013, the one skill of ADR-0018, the second binary of ADR-0019— so there
+# is no need to check that it is: there is no way in for a seventh file.
 readonly BOX="$DESTINATION/box"
 rm -rf "$BOX"
 mkdir -p "$BOX/.claude-plugin"
 cp "$ROOT/publishing/box/.claude-plugin/plugin.json" "$BOX/.claude-plugin/plugin.json"
 cp "$ROOT/publishing/box/.mcp.json" "$BOX/.mcp.json"
 cp "$ROOT/launcher.sh" "$BOX/launcher.sh"
-cp "$BINARY" "$BOX/flipchart"
+cp "$MACOS_BINARY" "$BOX/flipchart-macos"
+cp "$LINUX_BINARY" "$BOX/flipchart-linux-x86_64"
 mkdir -p "$BOX/skills/choosing-the-family"
 cp "$ROOT/publishing/box/skills/choosing-the-family/SKILL.md" \
   "$BOX/skills/choosing-the-family/SKILL.md"
-chmod 755 "$BOX/launcher.sh" "$BOX/flipchart"
+chmod 755 "$BOX/launcher.sh" "$BOX/flipchart-macos" "$BOX/flipchart-linux-x86_64"
 chmod 644 "$BOX/.claude-plugin/plugin.json" "$BOX/.mcp.json" \
   "$BOX/skills/choosing-the-family/SKILL.md"
 
@@ -78,7 +87,7 @@ rm -f "$ZIP"
 # Without them the binary would arrive with no execute bit, and the Launcher's
 # `chmod +x` would stop being a backstop and become the mechanism.
 looked_at=$(unzip -Z "$ZIP")
-for executable in flipchart launcher.sh; do
+for executable in flipchart-macos flipchart-linux-x86_64 launcher.sh; do
   grep -qE "^-rwxr-xr-x +[0-9.]+ unx .* $executable\$" <<<"$looked_at" \
     || die "$executable does not travel as a Unix -rwxr-xr-x:
 $looked_at"

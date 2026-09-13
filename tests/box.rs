@@ -15,9 +15,13 @@ const THE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 const REPO: &str = "an-account/a-repo";
 
-/// A publishing destination with a toy binary next to it. The packer does not
-/// care what the binary is, so three bytes measure the same as the 47 MB of the
-/// universal one and do not cost the `cp`.
+const TOY_MACOS: &str = "toy-macos";
+const TOY_LINUX: &str = "toy-linux";
+
+/// A publishing destination with a toy binary per Machine next to it. The
+/// packer does not care what a binary is, so a dozen bytes measure the same as
+/// the 47 MB of the universal one and do not cost the `cp` — and two different
+/// dozen say which one landed under which name.
 struct Bench {
     path: PathBuf,
 }
@@ -31,14 +35,16 @@ impl Bench {
             NEXT.fetch_add(1, Ordering::Relaxed)
         ));
         fs::create_dir_all(&path).expect("the publishing destination can be created");
-        fs::write(path.join("toy-binary"), "not a Mach-O").expect("the toy binary is written");
+        fs::write(path.join(TOY_MACOS), "not a Mach-O").expect("the toy macOS binary is written");
+        fs::write(path.join(TOY_LINUX), "not an ELF").expect("the toy Linux binary is written");
         Self { path }
     }
 
     fn package(&self, tag: &str) -> Result<PathBuf, String> {
         let run = Command::new(PACKAGE)
             .arg(tag)
-            .arg(self.path.join("toy-binary"))
+            .arg(self.path.join(TOY_MACOS))
+            .arg(self.path.join(TOY_LINUX))
             .arg(&self.path)
             .output()
             .expect("the packer runs");
@@ -122,7 +128,7 @@ fn the_versioned_manifest() -> Value {
 }
 
 #[test]
-fn the_box_carries_the_five_files_and_nothing_else() {
+fn the_box_carries_the_six_files_and_nothing_else() {
     let bench = Bench::new();
 
     let names: Vec<String> = inside_the_zip(&bench.the_zip())
@@ -136,7 +142,8 @@ fn the_box_carries_the_five_files_and_nothing_else() {
         [
             ".claude-plugin/plugin.json",
             ".mcp.json",
-            "flipchart",
+            "flipchart-linux-x86_64",
+            "flipchart-macos",
             "launcher.sh",
             "skills/choosing-the-family/SKILL.md"
         ]
@@ -180,14 +187,28 @@ fn the_skill_declares_a_description_the_agent_can_be_reached_by() {
 }
 
 /// What the host does is `chmod(mode & 0o777)` when the zip carries an execute
-/// bit, so this mode is what decides whether the binary arrives usable.
+/// bit, so this mode is what decides whether the binary arrives usable. Both
+/// travel, because the box is one and the Machine that unpacks it is not known
+/// here.
 #[test]
-fn the_binary_travels_with_the_execute_bit() {
+fn the_macos_binary_travels_with_the_execute_bit() {
     let bench = Bench::new();
 
     let modes = inside_the_zip(&bench.the_zip());
 
-    assert!(modes.contains(&("-rwxr-xr-x".to_string(), "flipchart".to_string())));
+    assert!(modes.contains(&("-rwxr-xr-x".to_string(), "flipchart-macos".to_string())));
+}
+
+#[test]
+fn the_linux_binary_travels_with_the_execute_bit() {
+    let bench = Bench::new();
+
+    let modes = inside_the_zip(&bench.the_zip());
+
+    assert!(modes.contains(&(
+        "-rwxr-xr-x".to_string(),
+        "flipchart-linux-x86_64".to_string()
+    )));
 }
 
 #[test]
@@ -253,9 +274,26 @@ fn a_tag_that_does_not_match_what_is_declared_is_not_packed() {
 }
 
 #[test]
-fn without_a_binary_nothing_is_packed() {
+fn without_the_macos_binary_nothing_is_packed() {
     let bench = Bench::new();
-    fs::remove_file(bench.path.join("toy-binary")).expect("the binary can be deleted");
+    fs::remove_file(bench.path.join(TOY_MACOS)).expect("the binary can be deleted");
+
+    let failure = bench
+        .package(&format!("v{THE_VERSION}"))
+        .expect_err("the packer refuses");
+
+    assert!(
+        failure.starts_with("package: there is no binary at"),
+        "{failure}"
+    );
+}
+
+/// A box short of one binary is a box that leaves one Machine with the
+/// Unavailable server, and the release is the last place that can notice.
+#[test]
+fn without_the_linux_binary_nothing_is_packed() {
+    let bench = Bench::new();
+    fs::remove_file(bench.path.join(TOY_LINUX)).expect("the binary can be deleted");
 
     let failure = bench
         .package(&format!("v{THE_VERSION}"))
@@ -394,13 +432,24 @@ fn the_launcher_in_the_repo_is_the_one_that_gets_packed() {
     assert_eq!(packed, versioned);
 }
 
+/// Whole, and under its own name: the two binaries reach the packer as two
+/// arguments, and swapping them would leave every Machine with the other one's.
 #[test]
-fn the_binary_arrives_whole_in_the_zip() {
+fn the_macos_binary_arrives_whole_and_under_its_own_name() {
     let bench = Bench::new();
 
-    let packed = from_the_zip(&bench.the_zip(), "flipchart");
+    let packed = from_the_zip(&bench.the_zip(), "flipchart-macos");
 
     assert_eq!(packed, "not a Mach-O");
+}
+
+#[test]
+fn the_linux_binary_arrives_whole_and_under_its_own_name() {
+    let bench = Bench::new();
+
+    let packed = from_the_zip(&bench.the_zip(), "flipchart-linux-x86_64");
+
+    assert_eq!(packed, "not an ELF");
 }
 
 #[test]
