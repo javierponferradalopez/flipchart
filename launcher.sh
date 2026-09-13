@@ -49,10 +49,25 @@ elif [ ! -e "$BINARY" ]; then
   DIAGNOSIS=$MISSING
 elif [ ! -x "$BINARY" ]; then
   DIAGNOSIS=$UNRUNNABLE
+# The probe, and why there is one: `execfail` only reaches a failure at
+# `execve`, which is how a Mach-O of another architecture fails. On Linux a
+# binary built against a newer glibc is a valid ELF —`execve` succeeds and the
+# dynamic loader fails afterwards—, and by then bash has been replaced and
+# there is nobody left to answer the handshake: the host sees a dead server and
+# the user gets the fifteen-minute ban this script exists to make impossible.
+# So the chosen binary is started once, and only a zero exit earns the
+# hand-over. It costs one process start, on the order of milliseconds, and
+# milliseconds is what was promised.
+#
+# Its stdin is `/dev/null` and not ours: the probe does not read, and one that
+# did would eat the `initialize` we are here to answer. Not mitigated, removed.
+elif ! "$BINARY" probe </dev/null >/dev/null 2>&1; then
+  DIAGNOSIS=$FOREIGN
 else
-  # `execfail` is the other half of the promise: without it, an `exec` that
-  # fails —a Mach-O of another architecture, Gatekeeper— kills the script, and
-  # with it the only voice that could have told anyone.
+  # `execfail` stays as the backstop behind the probe: what answered it a
+  # millisecond ago can be gone —a reinstall mid-flight, a quarantine that
+  # lands in between— by the time `exec` reaches it, and without this line that
+  # `exec` would kill the only voice left.
   shopt -s execfail
   exec "$BINARY" "$@"
   DIAGNOSIS=$FOREIGN

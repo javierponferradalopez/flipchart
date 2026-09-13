@@ -18,8 +18,18 @@ fn main() -> ExitCode {
             check(paths);
             ExitCode::SUCCESS
         }
+        // The Launcher's probe: it starts, it exits, and the zero it exits
+        // with is the whole answer — that this Machine's loader took the
+        // binary. On Linux one built against a newer glibc is a valid ELF,
+        // `execve` succeeds and the loader fails afterwards, with Bash already
+        // replaced and nobody left to answer the handshake (ADR-0019). No
+        // window and not a byte on stdout: the Launcher throws the output away
+        // and reads the exit code.
+        Some((subcommand, nothing)) if subcommand == "probe" && nothing.is_empty() => {
+            ExitCode::SUCCESS
+        }
         Some(_) => {
-            eprintln!("usage: flipchart [check <diagram.mmd>...]");
+            eprintln!("usage: flipchart [check <diagram.mmd>... | probe]");
             ExitCode::FAILURE
         }
     }

@@ -2,7 +2,7 @@ use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStdin, ChildStdout, Command, ExitStatus, Stdio};
+use std::process::{Child, ChildStdin, ChildStdout, Command, ExitStatus, Output, Stdio};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc::{Receiver, channel};
 use std::thread::{sleep, spawn};
@@ -113,15 +113,27 @@ impl PluginBox {
         plugin
     }
 
-    /// A PowerPC Mach-O header and nothing behind it: `exec` rejects it with
-    /// `ENOEXEC`, and the zeros are what stops bash from taking it for a script
-    /// and trying to run it.
+    /// A PowerPC Mach-O header and nothing behind it: `ENOEXEC` is what the
+    /// probe gets for trying to start it, and what `exec` would have got. The
+    /// zeros are what stops bash from taking it for a script and running it.
     fn with_a_binary_of_another_architecture() -> Self {
         let plugin = Self::empty("another-architecture");
         let mut header = vec![0u8; 96];
         header[..4].copy_from_slice(&0xfeed_facfu32.to_le_bytes());
         header[4..8].copy_from_slice(&0x0100_0012u32.to_le_bytes());
         fs::write(plugin.binary(), header).expect("the fake binary is written");
+        plugin.give_it_these_permissions(0o755);
+        plugin
+    }
+
+    /// The failure `execfail` cannot reach: something `execve` accepts and
+    /// that dies afterwards, which on Linux is what a binary built against a
+    /// newer glibc does —the loader fails once bash has already been replaced
+    /// (ADR-0019)—. A script has the same shape and needs no second glibc to
+    /// arrange one.
+    fn with_a_binary_that_starts_and_fails() -> Self {
+        let plugin = Self::empty("starts-and-fails");
+        fs::write(plugin.binary(), "#!/bin/bash\nexit 1\n").expect("the fake binary is written");
         plugin.give_it_these_permissions(0o755);
         plugin
     }
@@ -413,6 +425,9 @@ fn the_unavailable_servers_handshake_speaks_the_version_it_is_spoken_to_in() {
     assert_eq!(session.greeting["protocolVersion"], json!("2025-06-18"));
 }
 
+/// The probe is inside this measurement: the process start it costs is paid
+/// on every session, out of the same milliseconds the handshake is promised
+/// in.
 #[test]
 fn with_a_binary_of_another_architecture_it_answers_the_handshake_in_milliseconds() {
     let plugin = PluginBox::with_a_binary_of_another_architecture();
@@ -458,6 +473,23 @@ fn without_a_binary_the_warning_says_it_is_missing_and_that_it_must_be_reinstall
 #[test]
 fn with_a_binary_of_another_architecture_the_warning_says_this_machine_will_not_run_it() {
     let plugin = PluginBox::with_a_binary_of_another_architecture();
+    let mut session = Session::open(&plugin);
+
+    assert_eq!(
+        the_warning_of(&mut session),
+        "The flipchart is not available in this session and cannot draw anything: this machine \
+         refused to execute the flipchart binary the box carries for it. Nothing will appear on \
+         screen, so do not offer the user a diagram - explain in prose instead. Reinstalling the \
+         plugin is what brings it back."
+    );
+}
+
+/// The probe's whole reason for being: without it the Launcher `exec`s this
+/// box, bash is replaced by a process that exits, and the handshake is left
+/// for nobody to answer.
+#[test]
+fn a_binary_that_starts_and_fails_afterwards_says_this_machine_will_not_run_it() {
+    let plugin = PluginBox::with_a_binary_that_starts_and_fails();
     let mut session = Session::open(&plugin);
 
     assert_eq!(
@@ -610,4 +642,39 @@ fn the_unavailable_server_exits_with_zero_when_it_is_killed() {
     session.receives_sigterm();
 
     assert_eq!(session.exits_before(DEADLINE).code(), Some(0));
+}
+
+// ── The probe, from the side that answers it ──────────────────────────────────
+//
+// The Launcher's question is only worth asking if the binary answers it with a
+// zero and nothing else. `check` is the prior art —a subcommand that opens no
+// window— and the probe goes one further: it does not speak either. That it
+// answers at all is what says no window was opened, since a window takes the
+// event loop and never gives it back.
+
+fn the_binary_asked(arguments: &[&str]) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_flipchart"))
+        .args(arguments)
+        .output()
+        .expect("the flipchart binary runs")
+}
+
+#[test]
+fn the_binary_answers_the_probe_by_exiting_with_zero() {
+    assert_eq!(the_binary_asked(&["probe"]).status.code(), Some(0));
+}
+
+#[test]
+fn the_probe_writes_nothing_on_stdout() {
+    let run = the_binary_asked(&["probe"]);
+
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "");
+}
+
+#[test]
+fn an_argument_that_is_neither_check_nor_probe_gets_the_usage_line() {
+    let run = the_binary_asked(&["draw"]);
+
+    let said = String::from_utf8_lossy(&run.stderr);
+    assert!(said.starts_with("usage: flipchart"), "{said}");
 }
