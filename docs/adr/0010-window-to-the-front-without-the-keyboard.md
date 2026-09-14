@@ -1,6 +1,6 @@
 # The window comes to the front without taking the keyboard
 
-**Status:** accepted · **Date:** 2026-09-04
+**Status:** accepted · **Date:** 2026-09-04 · **Refined by** [0019](./0019-two-machines-one-box.md)
 
 **Deferred startup.** The main thread **does not call `run_native` until the first
 `show`**: it starts the server thread and blocks waiting on the channel. A session that
@@ -32,6 +32,12 @@ This is what makes it fragile and why it is written down here:
    the window **behind the terminal forever** — 3/3, which is *worse* than the outcome we
    were trying to avoid.
 3. **`orderFrontRegardless` instead of `Visible(true)` + `Focus`.**
+
+*All three are macOS. [0019](./0019-two-machines-one-box.md) says what is left of this page on
+the other Machine: the keyboard is still never taken —on Wayland no client can take it— but the
+window is **asked** to the front and not commanded, because no Wayland client can raise itself.
+The Flipchart sends `RequestUserAttention` at the same instant this one sends
+`orderFrontRegardless`, and what happens next is the compositor's to decide.*
 
 The first two are internals of the versions the repo pins: **raising `eframe` forces
 re-measuring this.**

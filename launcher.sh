@@ -15,24 +15,76 @@
 
 trap 'exit 0' INT TERM HUP
 
-readonly BINARY="${CLAUDE_PLUGIN_ROOT:-$(dirname "$0")}/flipchart"
+readonly BOX="${CLAUDE_PLUGIN_ROOT:-$(dirname "$0")}"
+
+# The box carries a binary per Machine and the choice lives here, because there
+# is nowhere else for it: measured in ADR-0014, a marketplace entry has no `os`,
+# no `platform`, no `arch` and no `requires`, so the catalog cannot route
+# anybody anywhere. `uname` is POSIX, and the macOS binary is a universal
+# Mach-O, which is why no Darwin is asked what architecture it is.
+readonly SYSTEM=$(uname -s 2>/dev/null)
+readonly ARCHITECTURE=$(uname -m 2>/dev/null)
+case "$SYSTEM $ARCHITECTURE" in
+  'Darwin '*) BINARY="$BOX/flipchart-macos" ;;
+  'Linux x86_64') BINARY="$BOX/flipchart-linux-x86_64" ;;
+  *) BINARY= ;;
+esac
+readonly BINARY
 
 readonly MISSING='the flipchart binary is not in the plugin directory'
 readonly UNRUNNABLE='the flipchart binary could not be given execute permission'
-readonly FOREIGN='this machine refused to execute the flipchart binary, which is a macOS build - another platform or architecture cannot run it'
+readonly FOREIGN='this machine refused to execute the flipchart binary the box carries for it'
+# What was found is named: the box carries no binary for this Machine, which is
+# not a fault in the user's setup and would be looked for there otherwise.
+readonly ELSEWHERE="the box carries no flipchart binary for this machine, which is $SYSTEM $ARCHITECTURE"
+# The two variables are named because whoever can put one back reads this: an
+# `ssh -X` not asked for, a container started without one. The binary survives
+# a missing display now —the main thread parks and the MCP server keeps
+# answering— but a Flipchart that cannot draw is worth less than a sentence
+# that says so, so the Launcher does not start down that road at all.
+readonly NO_DISPLAY='this machine has no display, because neither DISPLAY nor WAYLAND_DISPLAY is set'
 
 # A backstop, not the mechanism: the host preserves the 0755 from the Info-ZIP
-# zip, but nobody promises it in its schema.
-chmod +x "$BINARY" 2>/dev/null
+# zip, but nobody promises it in its schema. It applies to the chosen binary,
+# which is the only one this Machine is ever going to run.
+[ -n "$BINARY" ] && chmod +x "$BINARY" 2>/dev/null
 
-if [ ! -e "$BINARY" ]; then
+if [ -z "$BINARY" ]; then
+  DIAGNOSIS=$ELSEWHERE
+# Only Linux is asked: over SSH, in a container or in a devcontainer —normal
+# ways to run Claude Code— there is no display, and without one `winit` cannot
+# create an event loop at all (ADR-0019). On macOS the question does not exist:
+# there is a window server wherever a User is logged in, and `DISPLAY` means
+# nothing there.
+#
+# And it is asked before anything about the binary, because it is the one thing
+# here that reinstalling the plugin will not cure: said second, it would send a
+# User to fix the half that was going to leave them here anyway.
+elif [ "$SYSTEM" = Linux ] && [ -z "$DISPLAY" ] && [ -z "$WAYLAND_DISPLAY" ]; then
+  DIAGNOSIS=$NO_DISPLAY
+elif [ ! -e "$BINARY" ]; then
   DIAGNOSIS=$MISSING
 elif [ ! -x "$BINARY" ]; then
   DIAGNOSIS=$UNRUNNABLE
+# The probe, and why there is one: `execfail` only reaches a failure at
+# `execve`, which is how a Mach-O of another architecture fails. On Linux a
+# binary built against a newer glibc is a valid ELF —`execve` succeeds and the
+# dynamic loader fails afterwards—, and by then bash has been replaced and
+# there is nobody left to answer the handshake: the host sees a dead server and
+# the user gets the fifteen-minute ban this script exists to make impossible.
+# So the chosen binary is started once, and only a zero exit earns the
+# hand-over. It costs one process start, on the order of milliseconds, and
+# milliseconds is what was promised.
+#
+# Its stdin is `/dev/null` and not ours: the probe does not read, and one that
+# did would eat the `initialize` we are here to answer. Not mitigated, removed.
+elif ! "$BINARY" probe </dev/null >/dev/null 2>&1; then
+  DIAGNOSIS=$FOREIGN
 else
-  # `execfail` is the other half of the promise: without it, an `exec` that
-  # fails —a Mach-O of another architecture, Gatekeeper— kills the script, and
-  # with it the only voice that could have told anyone.
+  # `execfail` stays as the backstop behind the probe: what answered it a
+  # millisecond ago can be gone —a reinstall mid-flight, a quarantine that
+  # lands in between— by the time `exec` reaches it, and without this line that
+  # `exec` would kill the only voice left.
   shopt -s execfail
   exec "$BINARY" "$@"
   DIAGNOSIS=$FOREIGN

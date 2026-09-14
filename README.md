@@ -8,7 +8,7 @@
 behind — on a real whiteboard instead of painting it in ASCII inside the chat. And you can
 draw back.**
 
-A **Claude Code plugin for macOS** — an ephemeral visual channel for your agent.
+A **Claude Code plugin for macOS and Linux** — an ephemeral visual channel for your agent.
 One native binary, two lines to install.
 
 [The problem](#the-problem) · [When it earns its place](#when-it-earns-its-place) · [A session](#a-session) · [Install](#install) · [What you can ask](#what-you-can-ask) · [How it works](#how-it-works) · [What it is made of](#what-it-is-made-of)
@@ -19,9 +19,8 @@ One native binary, two lines to install.
 > ([ADR 0013](./docs/adr/0013-the-plugin-is-the-only-install-path.md)). The binary is an
 > ordinary MCP server over stdio, so other hosts are not impossible — they are
 > **undocumented, untested and unsupported**, and the trigger, the tool name and the skill
-> below are all Claude Code's. It is macOS only and early: six diagram families are
-> measured, `subgraph` grouping is the weak spot, and Linux and Windows are neither tested
-> nor promised.
+> below are all Claude Code's. It is early: six diagram families are measured, `subgraph`
+> grouping is the weak spot, and Windows is neither tested nor promised.
 
 ## The problem
 
@@ -144,10 +143,17 @@ agent never reaches for the window — **0 out of 36 turns** measured
 ([ADR 0012](./docs/adr/0012-the-trigger-lives-outside-the-binary.md)) — and paints the
 graph in ASCII instead.
 
-**Requirements:** a Claude Code with plugin support, on macOS 11 or later (Intel or Apple
-Silicon). **Nothing else**: no Node, no Python, no browser, no Rust toolchain. The window
+**Requirements:** a Claude Code with plugin support, on **macOS 11 or later** (Intel or Apple
+Silicon) or on **Linux `x86_64` with glibc 2.35 or later** — Ubuntu 22.04 and later, Debian 12,
+current Fedora. **Nothing else**: no Node, no Python, no browser, no Rust toolchain. The window
 opens on the machine you are sitting at, so a remote or cloud agent cannot use it
-([ADR 0015](./docs/adr/0015-what-this-product-is-not.md)).
+([ADR 0015](./docs/adr/0015-what-this-product-is-not.md)), and a session with no display —over
+SSH, in a container— says so instead of drawing into the void.
+
+On Linux, X11 and Wayland both work from the same binary, with one difference worth knowing:
+on Wayland no program can raise its own window, so when the agent draws, the flipchart **asks**
+for your attention and your compositor decides what to do with it. Your keyboard is never
+taken, on either ([ADR 0019](./docs/adr/0019-two-machines-one-box.md)).
 
 <details>
 <summary>Updating, uninstalling, and two names that bite</summary>
@@ -215,9 +221,10 @@ What it will never do is in [ADR 0015](./docs/adr/0015-what-this-product-is-not.
 
 Four things, and no browser anywhere.
 
-- **Rust, in one native binary.** The MCP server and the window are the same executable,
-  universal for Intel and Apple Silicon. Nothing else arrives with it and nothing else has
-  to be on the machine.
+- **Rust, in one native binary.** The MCP server and the window are the same executable —
+  universal for Intel and Apple Silicon on macOS, `x86_64` on Linux, and the plugin picks the
+  one your machine can run ([ADR 0019](./docs/adr/0019-two-machines-one-box.md)). Nothing else
+  arrives with it and nothing else has to be on the machine.
 - **MCP over stdio.** The host launches the binary as a child process and talks to it on
   its standard input. That is the entire interface the agent gets: two tools and the marks
   coming back.
@@ -227,7 +234,7 @@ Four things, and no browser anywhere.
   ([ADR 0002](./docs/adr/0002-mermaid-as-the-language.md),
   [ADR 0003](./docs/adr/0003-one-layout-engine-pinned.md)).
 - **A sheet painted, not embedded.** The drawing is rasterised in Rust, with the fonts
-  already on the machine, and put on the glass of a native macOS window. No web view, no
+  already on the machine, and put on the glass of a native window. No web view, no
   HTML, no JavaScript engine behind the picture — and the ink you draw on top never
   touches it ([ADR 0016](./docs/adr/0016-the-return-channel.md)).
 

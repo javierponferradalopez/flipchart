@@ -1,6 +1,6 @@
 # The launcher never fails
 
-**Status:** accepted · **Date:** 2026-09-02
+**Status:** accepted · **Date:** 2026-09-02 · **Refined by** [0019](./0019-two-machines-one-box.md)
 
 > **The Launcher never fails.** It answers the handshake **always**, in milliseconds,
 > binary or no binary, network or no network, and exits with 0.
@@ -57,6 +57,14 @@ running `/plugin install flipchart`, getting a Mach-O extracted and having `exec
 `ENOEXEC`. For that user the Unavailable server is not a degraded mode: **it is the only message
 they will ever receive.** Behind them come quarantine, a `chmod` failing on a read-only
 filesystem, a half-finished extraction on a full disk, and manual deletion.
+
+*[0019](./0019-two-machines-one-box.md) takes the flagship case away and puts two others in its
+place. The box now carries a Linux binary too, so the Launcher **chooses** before it hands over,
+and the User on Linux gets a flipchart instead of a message. What it cannot choose away is a
+binary the loader refuses —on Linux `execve` succeeds and the loader fails afterwards, where
+`execfail` cannot reach— and a session with no display at all. The Launcher probes for the first
+and looks at `DISPLAY` and `WAYLAND_DISPLAY` for the second; both end here, at the Unavailable
+server, which is why it is the piece that did not have to change.*
 
 ## Considered options
 

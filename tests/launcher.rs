@@ -2,7 +2,7 @@ use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStdin, ChildStdout, Command, ExitStatus, Stdio};
+use std::process::{Child, ChildStdin, ChildStdout, Command, ExitStatus, Output, Stdio};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc::{Receiver, channel};
 use std::thread::{sleep, spawn};
@@ -12,13 +12,101 @@ use serde_json::{Value, json};
 
 const LAUNCHER: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/launcher.sh");
 
+/// The two names the box carries. A third Machine has none here for the same
+/// reason it has no `src/machine` module: nothing is published for it, and the
+/// box would carry nothing for it either.
+const THE_MACOS_BINARY: &str = "flipchart-macos";
+const THE_LINUX_BINARY: &str = "flipchart-linux-x86_64";
+
+/// The same two names read from the Machine the suite is running on: the
+/// Launcher chooses one of them and never looks at the other, so which is which
+/// is what these tests are about.
+#[cfg(target_os = "macos")]
+const THE_BINARY_OF_THIS_MACHINE: &str = THE_MACOS_BINARY;
+#[cfg(target_os = "macos")]
+const THE_BINARY_OF_THE_OTHER_MACHINE: &str = THE_LINUX_BINARY;
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+const THE_BINARY_OF_THIS_MACHINE: &str = THE_LINUX_BINARY;
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+const THE_BINARY_OF_THE_OTHER_MACHINE: &str = THE_MACOS_BINARY;
+
+#[cfg(not(any(target_os = "macos", all(target_os = "linux", target_arch = "x86_64"))))]
+compile_error!(
+    "The box carries no binary for this Machine, so there is no name here for \
+     the Launcher to choose. Publishing one means reading docs/adr/0019, which \
+     says what x86_64-only costs and who it leaves out."
+);
+
 /// Five seconds is a test deadline, not the product's: the Launcher promises
 /// milliseconds, and what this deadline buys is that a silent Launcher fails
 /// instead of hanging the suite.
 const DEADLINE: Duration = Duration::from_secs(5);
 
+/// What «in milliseconds» is measured against, and it is deliberately loose:
+/// what it has to catch is a Launcher that takes *seconds* —a network call, a
+/// retry, a probe with no bound—, and a warm session comes in at tens of
+/// milliseconds.
+const THE_HANDSHAKE_BUDGET: Duration = Duration::from_secs(2);
+
+/// What a stand-in binary prints, and the only witness there is that the
+/// Launcher `exec`ed instead of staying: nothing else in this file writes on
+/// the Launcher's stdout except JSON-RPC.
+const THE_STAND_IN_SPEAKING: &str = "the stand-in binary was reached";
+
+/// The display of the session the Launcher is started in — `DISPLAY` for X11,
+/// `WAYLAND_DISPLAY` for Wayland, and neither over SSH, in a container or in a
+/// devcontainer, which are normal ways to run Claude Code on Linux.
+///
+/// Every Launcher this suite starts says which one it has, because the suite's
+/// own environment is one thing on a runner with a display and another over
+/// SSH, and no test should read differently on the two.
+#[derive(Clone, Copy)]
+enum Display {
+    X11,
+    Wayland,
+    None,
+}
+
+impl Display {
+    fn reaches(self, launcher: &mut Command) {
+        launcher.env_remove("DISPLAY");
+        launcher.env_remove("WAYLAND_DISPLAY");
+        match self {
+            Self::X11 => {
+                launcher.env("DISPLAY", ":0");
+            }
+            Self::Wayland => {
+                launcher.env("WAYLAND_DISPLAY", "wayland-0");
+            }
+            Self::None => {}
+        }
+    }
+}
+
+/// The Launcher as the Host starts it on the Machine running the suite, with a
+/// display, which is the case every test that is not about the display wants.
+fn the_launcher() -> Command {
+    let mut launcher = Command::new(LAUNCHER);
+    Display::X11.reaches(&mut launcher);
+    launcher
+}
+
+/// A directory of its own for each piece of scenery, named after what it is
+/// for so a leftover from a failed run says where it came from.
+fn a_directory_for(what: &str) -> PathBuf {
+    static NEXT: AtomicU32 = AtomicU32::new(0);
+    let path = std::env::temp_dir().join(format!(
+        "flipchart-{what}-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    fs::create_dir_all(&path).expect("the directory can be created");
+    path
+}
+
 /// The plugin directory exactly as the host leaves it: the binary next to the
-/// Launcher, in one of its four states.
+/// Launcher, in one of its states.
 struct PluginBox {
     path: PathBuf,
 }
@@ -26,6 +114,18 @@ struct PluginBox {
 impl PluginBox {
     fn without_a_binary() -> Self {
         Self::empty("missing")
+    }
+
+    /// The box as it reaches the Machine it was not built for: both names
+    /// travel in it, and the one this Machine would run is the one missing.
+    fn with_only_the_other_machines_binary() -> Self {
+        let plugin = Self::empty("the-other-machine");
+        fs::write(
+            plugin.path.join(THE_BINARY_OF_THE_OTHER_MACHINE),
+            "a binary for the other Machine",
+        )
+        .expect("the other Machine's binary is written");
+        plugin
     }
 
     /// The real binary, symlinked instead of copied: what is measured is that
@@ -48,6 +148,14 @@ impl PluginBox {
     /// The `chmod` that cannot: a read-only file system cannot be mounted
     /// inside a test, and `chflags uchg` reproduces it just the same —not even
     /// the owner can change its permissions—.
+    ///
+    /// macOS only, and the state is not the Machine's: a binary on a read-only
+    /// mount is as real on Linux. What Linux has no unprivileged way to do is
+    /// **reach** it from inside a test — `chattr +i` needs root, and taking
+    /// write permission off the directory does not stop the owner's `chmod`.
+    /// So this one is measured where it can be measured, rather than deleted to
+    /// make the other Machine green.
+    #[cfg(target_os = "macos")]
     fn with_a_binary_that_cannot_be_fixed() -> Self {
         let plugin = Self::empty("unfixable");
         fs::write(plugin.binary(), "").expect("the fake binary is written");
@@ -56,9 +164,9 @@ impl PluginBox {
         plugin
     }
 
-    /// A PowerPC Mach-O header and nothing behind it: `exec` rejects it with
-    /// `ENOEXEC`, and the zeros are what stops bash from taking it for a script
-    /// and trying to run it.
+    /// A PowerPC Mach-O header and nothing behind it: `ENOEXEC` is what the
+    /// probe gets for trying to start it, and what `exec` would have got. The
+    /// zeros are what stops bash from taking it for a script and running it.
     fn with_a_binary_of_another_architecture() -> Self {
         let plugin = Self::empty("another-architecture");
         let mut header = vec![0u8; 96];
@@ -69,21 +177,49 @@ impl PluginBox {
         plugin
     }
 
+    /// The failure `execfail` cannot reach: something `execve` accepts and
+    /// that dies afterwards, which on Linux is what a binary built against a
+    /// newer glibc does —the loader fails once bash has already been replaced
+    /// (ADR-0019)—. A script has the same shape and needs no second glibc to
+    /// arrange one.
+    fn with_a_binary_that_starts_and_fails() -> Self {
+        let plugin = Self::empty("starts-and-fails");
+        fs::write(plugin.binary(), "#!/bin/bash\nexit 1\n").expect("the fake binary is written");
+        plugin.give_it_these_permissions(0o755);
+        plugin
+    }
+
+    /// One Machine's binary as a stand-in that says out loud it was reached,
+    /// named for the Machine it belongs to and not for the one running the
+    /// suite: the display is asked about on a Machine this suite may not be
+    /// sitting on, where no binary of ours could even start. What is measured
+    /// through it is whether the Launcher hands its place over at all, not what
+    /// it hands it over to — so a script, which both Machines run, is the whole
+    /// of what is needed.
+    fn with_a_stand_in_for(machine: &str) -> Self {
+        let plugin = Self::empty("stand-in");
+        let binary = plugin.path.join(machine);
+        fs::write(
+            &binary,
+            format!("#!/bin/bash\necho {THE_STAND_IN_SPEAKING}\n"),
+        )
+        .expect("the stand-in binary is written");
+        fs::set_permissions(&binary, fs::Permissions::from_mode(0o755))
+            .expect("the stand-in binary can be made executable");
+        plugin
+    }
+
     fn empty(state: &str) -> Self {
-        static NEXT: AtomicU32 = AtomicU32::new(0);
-        let path = std::env::temp_dir().join(format!(
-            "flipchart-launcher-{}-{state}-{}",
-            std::process::id(),
-            NEXT.fetch_add(1, Ordering::Relaxed)
-        ));
-        fs::create_dir_all(&path).expect("the plugin box can be created");
-        Self { path }
+        Self {
+            path: a_directory_for(&format!("launcher-{state}")),
+        }
     }
 
     fn binary(&self) -> PathBuf {
-        self.path.join("flipchart")
+        self.path.join(THE_BINARY_OF_THIS_MACHINE)
     }
 
+    #[cfg(target_os = "macos")]
     fn chflags(&self, flags: &str) {
         let set = Command::new("chflags")
             .args(["-R", flags])
@@ -101,7 +237,69 @@ impl PluginBox {
 
 impl Drop for PluginBox {
     fn drop(&mut self) {
+        #[cfg(target_os = "macos")]
         self.chflags("nouchg");
+        let _ = fs::remove_dir_all(&self.path);
+    }
+}
+
+/// A Machine other than the one running the suite, which is the only way to
+/// reach the Users the box carries nothing for: ARM Linux, and everything else.
+///
+/// `uname` is the whole of what the Launcher asks about the Machine, and it is
+/// POSIX and comes off the `PATH` — so answering it is standing at the
+/// Machine's own boundary, not at anything of ours.
+struct Machine {
+    path: PathBuf,
+    display: Display,
+}
+
+impl Machine {
+    fn that_says_it_is(system: &str, architecture: &str) -> Self {
+        let path = a_directory_for("machine");
+        let uname = path.join("uname");
+        fs::write(
+            &uname,
+            format!(
+                "#!/bin/bash\ncase $1 in\n  -s) echo {system} ;;\n  -m) echo {architecture} ;;\nesac\n"
+            ),
+        )
+        .expect("the uname of another Machine is written");
+        fs::set_permissions(&uname, fs::Permissions::from_mode(0o755))
+            .expect("the uname of another Machine can be made executable");
+        Self {
+            path,
+            display: Display::X11,
+        }
+    }
+
+    fn with_the_display_in_wayland(mut self) -> Self {
+        self.display = Display::Wayland;
+        self
+    }
+
+    fn with_no_display(mut self) -> Self {
+        self.display = Display::None;
+        self
+    }
+
+    fn launcher(&self) -> Command {
+        let mut launcher = Command::new(LAUNCHER);
+        launcher.env(
+            "PATH",
+            format!(
+                "{}:{}",
+                self.path.display(),
+                std::env::var("PATH").unwrap_or_default()
+            ),
+        );
+        self.display.reaches(&mut launcher);
+        launcher
+    }
+}
+
+impl Drop for Machine {
+    fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.path);
     }
 }
@@ -118,7 +316,14 @@ struct Session {
 
 impl Session {
     fn open(plugin: &PluginBox) -> Self {
-        let mut session = Self::raw(&plugin.path);
+        Self::handshake(Self::raw(the_launcher(), &plugin.path))
+    }
+
+    fn open_on(plugin: &PluginBox, machine: &Machine) -> Self {
+        Self::handshake(Self::raw(machine.launcher(), &plugin.path))
+    }
+
+    fn handshake(mut session: Self) -> Self {
         session.greeting = session.request(
             "initialize",
             json!({
@@ -131,8 +336,8 @@ impl Session {
         session
     }
 
-    fn raw(root: &Path) -> Self {
-        let mut process = Command::new(LAUNCHER)
+    fn raw(mut launcher: Command, root: &Path) -> Self {
+        let mut process = launcher
             .env("CLAUDE_PLUGIN_ROOT", root)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -246,6 +451,26 @@ fn lines_of(output: ChildStdout) -> Receiver<String> {
     receives
 }
 
+/// The Launcher's own cost, told apart from the cost of the scenery being new.
+/// Measured on macOS: the first session of a test pays about 200 ms for the
+/// system validating a `uname` and a binary written milliseconds earlier, and
+/// with the whole suite writing executables at once that queue reaches 1.9 s —
+/// against a budget of 2. The same session repeated costs 16 ms.
+///
+/// So the fastest of a few samples is the one that speaks about the Launcher:
+/// a busy machine can only make a sample slower, and a Launcher that really
+/// took seconds would take them in every one.
+fn the_handshake_at_its_fastest(mut open: impl FnMut() -> Session) -> Duration {
+    (0..3)
+        .map(|_| {
+            let start = Instant::now();
+            let _session = open();
+            start.elapsed()
+        })
+        .min()
+        .expect("there is a sample")
+}
+
 fn the_warning_of(session: &mut Session) -> String {
     let tools = session.tools();
     let [warning] = &tools[..] else {
@@ -255,6 +480,20 @@ fn the_warning_of(session: &mut Session) -> String {
         .as_str()
         .expect("the tool carries a description")
         .to_string()
+}
+
+/// The Launcher run to its end on another Machine: with nothing on its stdin
+/// there is nothing for the Unavailable server to answer, so what is left on
+/// stdout is either the stand-in speaking —the hand-over happened— or nothing
+/// at all.
+fn what_the_launcher_left_on_stdout(plugin: &PluginBox, machine: &Machine) -> String {
+    let run = machine
+        .launcher()
+        .env("CLAUDE_PLUGIN_ROOT", &plugin.path)
+        .stdin(Stdio::null())
+        .output()
+        .expect("the Launcher runs");
+    String::from_utf8_lossy(&run.stdout).to_string()
 }
 
 #[test]
@@ -271,7 +510,7 @@ fn with_the_good_binary_the_launcher_hands_its_place_over() {
 fn the_launcher_passes_the_binary_the_arguments_it_was_called_with() {
     let plugin = PluginBox::with_the_good_binary();
 
-    let run = Command::new(LAUNCHER)
+    let run = the_launcher()
         .env("CLAUDE_PLUGIN_ROOT", &plugin.path)
         .args(["check", "/does-not-exist.mmd"])
         .output()
@@ -306,14 +545,16 @@ fn the_unavailable_servers_handshake_speaks_the_version_it_is_spoken_to_in() {
     assert_eq!(session.greeting["protocolVersion"], json!("2025-06-18"));
 }
 
+/// The probe is inside this measurement: the process start it costs is paid
+/// on every session, out of the same milliseconds the handshake is promised
+/// in.
 #[test]
 fn with_a_binary_of_another_architecture_it_answers_the_handshake_in_milliseconds() {
     let plugin = PluginBox::with_a_binary_of_another_architecture();
 
-    let start = Instant::now();
-    let _session = Session::open(&plugin);
+    let handshake = the_handshake_at_its_fastest(|| Session::open(&plugin));
 
-    assert!(start.elapsed() < Duration::from_secs(2));
+    assert!(handshake < THE_HANDSHAKE_BUDGET, "{handshake:?}");
 }
 
 #[test]
@@ -356,12 +597,176 @@ fn with_a_binary_of_another_architecture_the_warning_says_this_machine_will_not_
     assert_eq!(
         the_warning_of(&mut session),
         "The flipchart is not available in this session and cannot draw anything: this machine \
-         refused to execute the flipchart binary, which is a macOS build - another platform or \
-         architecture cannot run it. Nothing will appear on screen, so do not offer the user a \
-         diagram - explain in prose instead. Reinstalling the plugin is what brings it back."
+         refused to execute the flipchart binary the box carries for it. Nothing will appear on \
+         screen, so do not offer the user a diagram - explain in prose instead. Reinstalling the \
+         plugin is what brings it back."
     );
 }
 
+/// The probe's whole reason for being: without it the Launcher `exec`s this
+/// box, bash is replaced by a process that exits, and the handshake is left
+/// for nobody to answer.
+#[test]
+fn a_binary_that_starts_and_fails_afterwards_says_this_machine_will_not_run_it() {
+    let plugin = PluginBox::with_a_binary_that_starts_and_fails();
+    let mut session = Session::open(&plugin);
+
+    assert_eq!(
+        the_warning_of(&mut session),
+        "The flipchart is not available in this session and cannot draw anything: this machine \
+         refused to execute the flipchart binary the box carries for it. Nothing will appear on \
+         screen, so do not offer the user a diagram - explain in prose instead. Reinstalling the \
+         plugin is what brings it back."
+    );
+}
+
+/// The choice, measured from the side it has to refuse: the box carries the
+/// other Machine's binary and the Launcher does not reach for it.
+#[test]
+fn the_binary_of_the_other_machine_is_not_one_this_one_can_start() {
+    let plugin = PluginBox::with_only_the_other_machines_binary();
+    let mut session = Session::open(&plugin);
+
+    assert_eq!(session.names_of_its_tools(), ["unavailable"]);
+}
+
+#[test]
+fn on_a_machine_with_no_binary_the_handshake_is_answered_in_milliseconds() {
+    let plugin = PluginBox::with_the_good_binary();
+    let arm_linux = Machine::that_says_it_is("Linux", "aarch64");
+
+    let handshake = the_handshake_at_its_fastest(|| Session::open_on(&plugin, &arm_linux));
+
+    assert!(handshake < THE_HANDSHAKE_BUDGET, "{handshake:?}");
+}
+
+#[test]
+fn on_a_machine_with_no_binary_it_announces_a_single_tool() {
+    let plugin = PluginBox::with_the_good_binary();
+    let arm_linux = Machine::that_says_it_is("Linux", "aarch64");
+    let mut session = Session::open_on(&plugin, &arm_linux);
+
+    assert_eq!(session.names_of_its_tools(), ["unavailable"]);
+}
+
+/// What was found, said out loud: without it the User reads that something is
+/// wrong and goes looking for the fault in their own setup, where it is not.
+#[test]
+fn on_a_machine_with_no_binary_the_warning_names_what_was_found() {
+    let plugin = PluginBox::with_the_good_binary();
+    let arm_linux = Machine::that_says_it_is("Linux", "aarch64");
+    let mut session = Session::open_on(&plugin, &arm_linux);
+
+    assert_eq!(
+        the_warning_of(&mut session),
+        "The flipchart is not available in this session and cannot draw anything: the box carries \
+         no flipchart binary for this machine, which is Linux aarch64. Nothing will appear on \
+         screen, so do not offer the user a diagram - explain in prose instead. Reinstalling the \
+         plugin is what brings it back."
+    );
+}
+
+#[test]
+fn on_a_machine_with_no_binary_it_exits_with_zero_when_its_input_is_closed() {
+    let plugin = PluginBox::with_the_good_binary();
+    let arm_linux = Machine::that_says_it_is("Linux", "aarch64");
+    let mut session = Session::open_on(&plugin, &arm_linux);
+
+    session.closes_its_input();
+
+    assert_eq!(session.exits_before(DEADLINE).code(), Some(0));
+}
+
+// ── The display, which only Linux is asked about ──────────────────────────────
+//
+// Over SSH, in a container, in a devcontainer there is no display and `winit`
+// cannot create an event loop at all (ADR-0019). The Machine is the faked one
+// here on both Machines, because the question belongs to Linux and the suite
+// has to ask it from macOS too — and because the suite's own session, which
+// does have a display on the runner, is not the one under test.
+
+#[test]
+fn on_linux_with_no_display_it_announces_a_single_tool() {
+    let plugin = PluginBox::with_a_stand_in_for(THE_LINUX_BINARY);
+    let over_ssh = Machine::that_says_it_is("Linux", "x86_64").with_no_display();
+    let mut session = Session::open_on(&plugin, &over_ssh);
+
+    assert_eq!(session.names_of_its_tools(), ["unavailable"]);
+}
+
+/// The criterion behind the tool list: the binary is there, it answers the
+/// probe, and the Launcher still does not hand its place over to it.
+#[test]
+fn on_linux_with_no_display_the_binary_is_never_reached() {
+    let plugin = PluginBox::with_a_stand_in_for(THE_LINUX_BINARY);
+    let over_ssh = Machine::that_says_it_is("Linux", "x86_64").with_no_display();
+
+    assert_eq!(what_the_launcher_left_on_stdout(&plugin, &over_ssh), "");
+}
+
+#[test]
+fn on_linux_with_no_display_the_warning_names_the_missing_display() {
+    let plugin = PluginBox::with_a_stand_in_for(THE_LINUX_BINARY);
+    let over_ssh = Machine::that_says_it_is("Linux", "x86_64").with_no_display();
+    let mut session = Session::open_on(&plugin, &over_ssh);
+
+    assert_eq!(
+        the_warning_of(&mut session),
+        "The flipchart is not available in this session and cannot draw anything: this machine \
+         has no display, because neither DISPLAY nor WAYLAND_DISPLAY is set. Nothing will appear \
+         on screen, so do not offer the user a diagram - explain in prose instead. Reinstalling \
+         the plugin is what brings it back."
+    );
+}
+
+#[test]
+fn on_linux_with_no_display_the_handshake_is_answered_in_milliseconds() {
+    let plugin = PluginBox::with_a_stand_in_for(THE_LINUX_BINARY);
+    let over_ssh = Machine::that_says_it_is("Linux", "x86_64").with_no_display();
+
+    let handshake = the_handshake_at_its_fastest(|| Session::open_on(&plugin, &over_ssh));
+
+    assert!(handshake < THE_HANDSHAKE_BUDGET, "{handshake:?}");
+}
+
+#[test]
+fn on_linux_with_no_display_it_exits_with_zero_when_its_input_is_closed() {
+    let plugin = PluginBox::with_a_stand_in_for(THE_LINUX_BINARY);
+    let over_ssh = Machine::that_says_it_is("Linux", "x86_64").with_no_display();
+    let mut session = Session::open_on(&plugin, &over_ssh);
+
+    session.closes_its_input();
+
+    assert_eq!(session.exits_before(DEADLINE).code(), Some(0));
+}
+
+#[test]
+fn on_linux_with_an_x11_display_the_launcher_hands_its_place_over() {
+    let plugin = PluginBox::with_a_stand_in_for(THE_LINUX_BINARY);
+    let x11 = Machine::that_says_it_is("Linux", "x86_64");
+
+    assert!(what_the_launcher_left_on_stdout(&plugin, &x11).contains(THE_STAND_IN_SPEAKING));
+}
+
+#[test]
+fn on_linux_with_a_wayland_display_the_launcher_hands_its_place_over() {
+    let plugin = PluginBox::with_a_stand_in_for(THE_LINUX_BINARY);
+    let wayland = Machine::that_says_it_is("Linux", "x86_64").with_the_display_in_wayland();
+
+    assert!(what_the_launcher_left_on_stdout(&plugin, &wayland).contains(THE_STAND_IN_SPEAKING));
+}
+
+/// There is a window server wherever a User is logged in and `DISPLAY` means
+/// nothing on macOS, so the absence of both variables is not news there.
+#[test]
+fn on_macos_the_absence_of_a_display_changes_nothing() {
+    let plugin = PluginBox::with_a_stand_in_for(THE_MACOS_BINARY);
+    let macos = Machine::that_says_it_is("Darwin", "arm64").with_no_display();
+
+    assert!(what_the_launcher_left_on_stdout(&plugin, &macos).contains(THE_STAND_IN_SPEAKING));
+}
+
+#[cfg(target_os = "macos")]
 #[test]
 fn with_a_binary_that_cannot_be_fixed_the_warning_says_there_is_no_execute_permission() {
     let plugin = PluginBox::with_a_binary_that_cannot_be_fixed();
@@ -444,4 +849,39 @@ fn the_unavailable_server_exits_with_zero_when_it_is_killed() {
     session.receives_sigterm();
 
     assert_eq!(session.exits_before(DEADLINE).code(), Some(0));
+}
+
+// ── The probe, from the side that answers it ──────────────────────────────────
+//
+// The Launcher's question is only worth asking if the binary answers it with a
+// zero and nothing else. `check` is the prior art —a subcommand that opens no
+// window— and the probe goes one further: it does not speak either. That it
+// answers at all is what says no window was opened, since a window takes the
+// event loop and never gives it back.
+
+fn the_binary_asked(arguments: &[&str]) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_flipchart"))
+        .args(arguments)
+        .output()
+        .expect("the flipchart binary runs")
+}
+
+#[test]
+fn the_binary_answers_the_probe_by_exiting_with_zero() {
+    assert_eq!(the_binary_asked(&["probe"]).status.code(), Some(0));
+}
+
+#[test]
+fn the_probe_writes_nothing_on_stdout() {
+    let run = the_binary_asked(&["probe"]);
+
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "");
+}
+
+#[test]
+fn an_argument_that_is_neither_check_nor_probe_gets_the_usage_line() {
+    let run = the_binary_asked(&["draw"]);
+
+    let said = String::from_utf8_lossy(&run.stderr);
+    assert!(said.starts_with("usage: flipchart"), "{said}");
 }

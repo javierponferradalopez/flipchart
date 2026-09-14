@@ -6,9 +6,48 @@ on:
   pull_request:
 
 jobs:
+  # The two Machines of ADR-0019, and both have to pass: a Linux-only
+  # regression shipping is the whole reason this stopped being one runner.
+  # `ubuntu-22.04` and not the newest on purpose — it is the oldest GitHub
+  # hosts, and its glibc 2.35 is the floor the published binary is built
+  # against, so the Machine that verifies is the Machine that sets the floor.
+  #
+  # `fail-fast` is off because the news worth having is *which* Machine broke,
+  # and a job cancelled mid-run does not say.
   verify:
-    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        machine: [macos-latest, ubuntu-22.04]
+    runs-on: ${{ matrix.machine }}
     steps:
       - uses: actions/checkout@v4
       - uses: Swatinem/rust-cache@v2
-      - run: make verify
+
+      - name: verify
+        if: runner.os == 'macOS'
+        run: make verify
+
+      # Measured on a bare `ubuntu:22.04`: with no display `eframe` cannot
+      # create the event loop. That failure no longer ends the session —
+      # ADR-0019's park keeps the MCP server answering, and `tests/lifecycle.rs`
+      # measures it by taking the display away from a process on purpose — but
+      # the rest of the suite is here to see the flipchart draw, and drawing
+      # wants a display.
+      #
+      # So the runner is given one, and a renderer to go with it:
+      # `eframe`'s default renderer is **wgpu**, which asks for a Vulkan driver,
+      # and `mesa-vulkan-drivers` brings lavapipe — one in software. Honest
+      # limit: lavapipe proves wgpu can start, not that a real driver will.
+      #
+      # macOS needs none of this: there is a window server wherever a user is
+      # logged in.
+      - name: a display and a renderer for the tests that draw
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends xvfb mesa-vulkan-drivers
+
+      - name: verify, under a virtual display
+        if: runner.os == 'Linux'
+        run: xvfb-run -a make verify
