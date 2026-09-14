@@ -37,6 +37,12 @@ readonly FOREIGN='this machine refused to execute the flipchart binary the box c
 # What was found is named: the box carries no binary for this Machine, which is
 # not a fault in the user's setup and would be looked for there otherwise.
 readonly ELSEWHERE="the box carries no flipchart binary for this machine, which is $SYSTEM $ARCHITECTURE"
+# The two variables are named because whoever can put one back reads this: an
+# `ssh -X` not asked for, a container started without one. The binary survives
+# a missing display now —the main thread parks and the MCP server keeps
+# answering— but a Flipchart that cannot draw is worth less than a sentence
+# that says so, so the Launcher does not start down that road at all.
+readonly NO_DISPLAY='this machine has no display, because neither DISPLAY nor WAYLAND_DISPLAY is set'
 
 # A backstop, not the mechanism: the host preserves the 0755 from the Info-ZIP
 # zip, but nobody promises it in its schema. It applies to the chosen binary,
@@ -45,6 +51,17 @@ readonly ELSEWHERE="the box carries no flipchart binary for this machine, which 
 
 if [ -z "$BINARY" ]; then
   DIAGNOSIS=$ELSEWHERE
+# Only Linux is asked: over SSH, in a container or in a devcontainer —normal
+# ways to run Claude Code— there is no display, and without one `winit` cannot
+# create an event loop at all (ADR-0019). On macOS the question does not exist:
+# there is a window server wherever a User is logged in, and `DISPLAY` means
+# nothing there.
+#
+# And it is asked before anything about the binary, because it is the one thing
+# here that reinstalling the plugin will not cure: said second, it would send a
+# User to fix the half that was going to leave them here anyway.
+elif [ "$SYSTEM" = Linux ] && [ -z "$DISPLAY" ] && [ -z "$WAYLAND_DISPLAY" ]; then
+  DIAGNOSIS=$NO_DISPLAY
 elif [ ! -e "$BINARY" ]; then
   DIAGNOSIS=$MISSING
 elif [ ! -x "$BINARY" ]; then

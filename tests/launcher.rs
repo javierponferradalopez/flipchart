@@ -12,22 +12,24 @@ use serde_json::{Value, json};
 
 const LAUNCHER: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/launcher.sh");
 
-/// The two names the box carries, read from the Machine the suite is running
-/// on: the Launcher chooses one of them and never looks at the other, so which
-/// is which is what these tests are about.
-///
-/// A third Machine has no name here for the same reason it has no
-/// `src/machine` module: nothing is published for it, and the box would carry
-/// nothing for it either.
+/// The two names the box carries. A third Machine has none here for the same
+/// reason it has no `src/machine` module: nothing is published for it, and the
+/// box would carry nothing for it either.
+const THE_MACOS_BINARY: &str = "flipchart-macos";
+const THE_LINUX_BINARY: &str = "flipchart-linux-x86_64";
+
+/// The same two names read from the Machine the suite is running on: the
+/// Launcher chooses one of them and never looks at the other, so which is which
+/// is what these tests are about.
 #[cfg(target_os = "macos")]
-const THE_BINARY_OF_THIS_MACHINE: &str = "flipchart-macos";
+const THE_BINARY_OF_THIS_MACHINE: &str = THE_MACOS_BINARY;
 #[cfg(target_os = "macos")]
-const THE_BINARY_OF_THE_OTHER_MACHINE: &str = "flipchart-linux-x86_64";
+const THE_BINARY_OF_THE_OTHER_MACHINE: &str = THE_LINUX_BINARY;
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-const THE_BINARY_OF_THIS_MACHINE: &str = "flipchart-linux-x86_64";
+const THE_BINARY_OF_THIS_MACHINE: &str = THE_LINUX_BINARY;
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-const THE_BINARY_OF_THE_OTHER_MACHINE: &str = "flipchart-macos";
+const THE_BINARY_OF_THE_OTHER_MACHINE: &str = THE_MACOS_BINARY;
 
 #[cfg(not(any(target_os = "macos", all(target_os = "linux", target_arch = "x86_64"))))]
 compile_error!(
@@ -40,6 +42,49 @@ compile_error!(
 /// milliseconds, and what this deadline buys is that a silent Launcher fails
 /// instead of hanging the suite.
 const DEADLINE: Duration = Duration::from_secs(5);
+
+/// What a stand-in binary prints, and the only witness there is that the
+/// Launcher `exec`ed instead of staying: nothing else in this file writes on
+/// the Launcher's stdout except JSON-RPC.
+const THE_STAND_IN_SPEAKING: &str = "the stand-in binary was reached";
+
+/// The display of the session the Launcher is started in — `DISPLAY` for X11,
+/// `WAYLAND_DISPLAY` for Wayland, and neither over SSH, in a container or in a
+/// devcontainer, which are normal ways to run Claude Code on Linux.
+///
+/// Every Launcher this suite starts says which one it has, because the suite's
+/// own environment is one thing on a runner with a display and another over
+/// SSH, and no test should read differently on the two.
+#[derive(Clone, Copy)]
+enum Display {
+    X11,
+    Wayland,
+    None,
+}
+
+impl Display {
+    fn reaches(self, launcher: &mut Command) {
+        launcher.env_remove("DISPLAY");
+        launcher.env_remove("WAYLAND_DISPLAY");
+        match self {
+            Self::X11 => {
+                launcher.env("DISPLAY", ":0");
+            }
+            Self::Wayland => {
+                launcher.env("WAYLAND_DISPLAY", "wayland-0");
+            }
+            Self::None => {}
+        }
+    }
+}
+
+/// The Launcher as the Host starts it on the Machine running the suite, with a
+/// display, which is the case every test that is not about the display wants.
+fn the_launcher() -> Command {
+    let mut launcher = Command::new(LAUNCHER);
+    Display::X11.reaches(&mut launcher);
+    launcher
+}
 
 /// A directory of its own for each piece of scenery, named after what it is
 /// for so a leftover from a failed run says where it came from.
@@ -138,6 +183,26 @@ impl PluginBox {
         plugin
     }
 
+    /// One Machine's binary as a stand-in that says out loud it was reached,
+    /// named for the Machine it belongs to and not for the one running the
+    /// suite: the display is asked about on a Machine this suite may not be
+    /// sitting on, where no binary of ours could even start. What is measured
+    /// through it is whether the Launcher hands its place over at all, not what
+    /// it hands it over to — so a script, which both Machines run, is the whole
+    /// of what is needed.
+    fn with_a_stand_in_for(machine: &str) -> Self {
+        let plugin = Self::empty("stand-in");
+        let binary = plugin.path.join(machine);
+        fs::write(
+            &binary,
+            format!("#!/bin/bash\necho {THE_STAND_IN_SPEAKING}\n"),
+        )
+        .expect("the stand-in binary is written");
+        fs::set_permissions(&binary, fs::Permissions::from_mode(0o755))
+            .expect("the stand-in binary can be made executable");
+        plugin
+    }
+
     fn empty(state: &str) -> Self {
         Self {
             path: a_directory_for(&format!("launcher-{state}")),
@@ -180,6 +245,7 @@ impl Drop for PluginBox {
 /// Machine's own boundary, not at anything of ours.
 struct Machine {
     path: PathBuf,
+    display: Display,
 }
 
 impl Machine {
@@ -195,7 +261,20 @@ impl Machine {
         .expect("the uname of another Machine is written");
         fs::set_permissions(&uname, fs::Permissions::from_mode(0o755))
             .expect("the uname of another Machine can be made executable");
-        Self { path }
+        Self {
+            path,
+            display: Display::X11,
+        }
+    }
+
+    fn with_the_display_in_wayland(mut self) -> Self {
+        self.display = Display::Wayland;
+        self
+    }
+
+    fn with_no_display(mut self) -> Self {
+        self.display = Display::None;
+        self
     }
 
     fn launcher(&self) -> Command {
@@ -208,6 +287,7 @@ impl Machine {
                 std::env::var("PATH").unwrap_or_default()
             ),
         );
+        self.display.reaches(&mut launcher);
         launcher
     }
 }
@@ -230,7 +310,7 @@ struct Session {
 
 impl Session {
     fn open(plugin: &PluginBox) -> Self {
-        Self::handshake(Self::raw(Command::new(LAUNCHER), &plugin.path))
+        Self::handshake(Self::raw(the_launcher(), &plugin.path))
     }
 
     fn open_on(plugin: &PluginBox, machine: &Machine) -> Self {
@@ -376,6 +456,20 @@ fn the_warning_of(session: &mut Session) -> String {
         .to_string()
 }
 
+/// The Launcher run to its end on another Machine: with nothing on its stdin
+/// there is nothing for the Unavailable server to answer, so what is left on
+/// stdout is either the stand-in speaking —the hand-over happened— or nothing
+/// at all.
+fn what_the_launcher_left_on_stdout(plugin: &PluginBox, machine: &Machine) -> String {
+    let run = machine
+        .launcher()
+        .env("CLAUDE_PLUGIN_ROOT", &plugin.path)
+        .stdin(Stdio::null())
+        .output()
+        .expect("the Launcher runs");
+    String::from_utf8_lossy(&run.stdout).to_string()
+}
+
 #[test]
 fn with_the_good_binary_the_launcher_hands_its_place_over() {
     let plugin = PluginBox::with_the_good_binary();
@@ -390,7 +484,7 @@ fn with_the_good_binary_the_launcher_hands_its_place_over() {
 fn the_launcher_passes_the_binary_the_arguments_it_was_called_with() {
     let plugin = PluginBox::with_the_good_binary();
 
-    let run = Command::new(LAUNCHER)
+    let run = the_launcher()
         .env("CLAUDE_PLUGIN_ROOT", &plugin.path)
         .args(["check", "/does-not-exist.mmd"])
         .output()
@@ -557,6 +651,96 @@ fn on_a_machine_with_no_binary_it_exits_with_zero_when_its_input_is_closed() {
     session.closes_its_input();
 
     assert_eq!(session.exits_before(DEADLINE).code(), Some(0));
+}
+
+// ── The display, which only Linux is asked about ──────────────────────────────
+//
+// Over SSH, in a container, in a devcontainer there is no display and `winit`
+// cannot create an event loop at all (ADR-0019). The Machine is the faked one
+// here on both Machines, because the question belongs to Linux and the suite
+// has to ask it from macOS too — and because the suite's own session, which
+// does have a display on the runner, is not the one under test.
+
+#[test]
+fn on_linux_with_no_display_it_announces_a_single_tool() {
+    let plugin = PluginBox::with_a_stand_in_for(THE_LINUX_BINARY);
+    let over_ssh = Machine::that_says_it_is("Linux", "x86_64").with_no_display();
+    let mut session = Session::open_on(&plugin, &over_ssh);
+
+    assert_eq!(session.names_of_its_tools(), ["unavailable"]);
+}
+
+/// The criterion behind the tool list: the binary is there, it answers the
+/// probe, and the Launcher still does not hand its place over to it.
+#[test]
+fn on_linux_with_no_display_the_binary_is_never_reached() {
+    let plugin = PluginBox::with_a_stand_in_for(THE_LINUX_BINARY);
+    let over_ssh = Machine::that_says_it_is("Linux", "x86_64").with_no_display();
+
+    assert_eq!(what_the_launcher_left_on_stdout(&plugin, &over_ssh), "");
+}
+
+#[test]
+fn on_linux_with_no_display_the_warning_names_the_missing_display() {
+    let plugin = PluginBox::with_a_stand_in_for(THE_LINUX_BINARY);
+    let over_ssh = Machine::that_says_it_is("Linux", "x86_64").with_no_display();
+    let mut session = Session::open_on(&plugin, &over_ssh);
+
+    assert_eq!(
+        the_warning_of(&mut session),
+        "The flipchart is not available in this session and cannot draw anything: this machine \
+         has no display, because neither DISPLAY nor WAYLAND_DISPLAY is set. Nothing will appear \
+         on screen, so do not offer the user a diagram - explain in prose instead. Reinstalling \
+         the plugin is what brings it back."
+    );
+}
+
+#[test]
+fn on_linux_with_no_display_the_handshake_is_answered_in_milliseconds() {
+    let plugin = PluginBox::with_a_stand_in_for(THE_LINUX_BINARY);
+    let over_ssh = Machine::that_says_it_is("Linux", "x86_64").with_no_display();
+
+    let start = Instant::now();
+    let _session = Session::open_on(&plugin, &over_ssh);
+
+    assert!(start.elapsed() < Duration::from_secs(2));
+}
+
+#[test]
+fn on_linux_with_no_display_it_exits_with_zero_when_its_input_is_closed() {
+    let plugin = PluginBox::with_a_stand_in_for(THE_LINUX_BINARY);
+    let over_ssh = Machine::that_says_it_is("Linux", "x86_64").with_no_display();
+    let mut session = Session::open_on(&plugin, &over_ssh);
+
+    session.closes_its_input();
+
+    assert_eq!(session.exits_before(DEADLINE).code(), Some(0));
+}
+
+#[test]
+fn on_linux_with_an_x11_display_the_launcher_hands_its_place_over() {
+    let plugin = PluginBox::with_a_stand_in_for(THE_LINUX_BINARY);
+    let x11 = Machine::that_says_it_is("Linux", "x86_64");
+
+    assert!(what_the_launcher_left_on_stdout(&plugin, &x11).contains(THE_STAND_IN_SPEAKING));
+}
+
+#[test]
+fn on_linux_with_a_wayland_display_the_launcher_hands_its_place_over() {
+    let plugin = PluginBox::with_a_stand_in_for(THE_LINUX_BINARY);
+    let wayland = Machine::that_says_it_is("Linux", "x86_64").with_the_display_in_wayland();
+
+    assert!(what_the_launcher_left_on_stdout(&plugin, &wayland).contains(THE_STAND_IN_SPEAKING));
+}
+
+/// There is a window server wherever a User is logged in and `DISPLAY` means
+/// nothing on macOS, so the absence of both variables is not news there.
+#[test]
+fn on_macos_the_absence_of_a_display_changes_nothing() {
+    let plugin = PluginBox::with_a_stand_in_for(THE_MACOS_BINARY);
+    let macos = Machine::that_says_it_is("Darwin", "arm64").with_no_display();
+
+    assert!(what_the_launcher_left_on_stdout(&plugin, &macos).contains(THE_STAND_IN_SPEAKING));
 }
 
 #[cfg(target_os = "macos")]
