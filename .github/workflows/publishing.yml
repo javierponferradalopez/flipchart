@@ -13,7 +13,34 @@ permissions:
   contents: write
 
 jobs:
+  # The step ADR-0019 puts before the first. The Linux binary is built natively
+  # on the Machine that sets the floor it declares — `ubuntu-22.04`, the oldest
+  # GitHub hosts, and the glibc 2.35 the README promises. Cross-compiling it on
+  # the macOS runner was rejected for that reason: a floor is only stateable if
+  # something was actually built against it.
+  linux:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+
+      - name: build the linux binary
+        run: cargo build --release
+
+      # The artifact travels zipped by the action and comes back without its
+      # execute bit; `package.sh` chmods what it copies, so the bit the user
+      # receives is written by the packer and not carried from here.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: flipchart-linux-x86_64
+          path: target/release/flipchart
+          if-no-files-found: error
+
+  # Packing stays here, which is where `lipo` and `codesign` are: the two steps
+  # that treat the Apple slices are untouched, and the Linux binary arrives as a
+  # downloaded artifact before `package.sh` runs.
   publish:
+    needs: linux
     runs-on: macos-latest
     steps:
       # Whole history, not the tag's: the last step commits the catalog on
@@ -66,10 +93,20 @@ jobs:
           done
           ls -l "$RUNNER_TEMP/flipchart"
 
+      # Into a directory of its own: the universal Mach-O is already sitting at
+      # `$RUNNER_TEMP/flipchart` under that same name.
+      - name: the linux binary built on the other machine
+        uses: actions/download-artifact@v4
+        with:
+          name: flipchart-linux-x86_64
+          path: ${{ runner.temp }}/linux
+
+      # The measured size of the zip is printed here, and the 256 MiB ceiling it
+      # is checked against has no valve.
       - name: package with Info-ZIP and compute the sha256
         run: |
-          zip=$(publishing/package.sh \
-            "$GITHUB_REF_NAME" "$RUNNER_TEMP/flipchart" "$RUNNER_TEMP")
+          zip=$(publishing/package.sh "$GITHUB_REF_NAME" \
+            "$RUNNER_TEMP/flipchart" "$RUNNER_TEMP/linux/flipchart" "$RUNNER_TEMP")
           echo "ZIP=$zip" >> "$GITHUB_ENV"
 
       - name: generate the catalog from the tag
