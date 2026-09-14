@@ -43,6 +43,12 @@ compile_error!(
 /// instead of hanging the suite.
 const DEADLINE: Duration = Duration::from_secs(5);
 
+/// What «in milliseconds» is measured against, and it is deliberately loose:
+/// what it has to catch is a Launcher that takes *seconds* —a network call, a
+/// retry, a probe with no bound—, and a warm session comes in at tens of
+/// milliseconds.
+const THE_HANDSHAKE_BUDGET: Duration = Duration::from_secs(2);
+
 /// What a stand-in binary prints, and the only witness there is that the
 /// Launcher `exec`ed instead of staying: nothing else in this file writes on
 /// the Launcher's stdout except JSON-RPC.
@@ -445,6 +451,26 @@ fn lines_of(output: ChildStdout) -> Receiver<String> {
     receives
 }
 
+/// The Launcher's own cost, told apart from the cost of the scenery being new.
+/// Measured on macOS: the first session of a test pays about 200 ms for the
+/// system validating a `uname` and a binary written milliseconds earlier, and
+/// with the whole suite writing executables at once that queue reaches 1.9 s —
+/// against a budget of 2. The same session repeated costs 16 ms.
+///
+/// So the fastest of a few samples is the one that speaks about the Launcher:
+/// a busy machine can only make a sample slower, and a Launcher that really
+/// took seconds would take them in every one.
+fn the_handshake_at_its_fastest(mut open: impl FnMut() -> Session) -> Duration {
+    (0..3)
+        .map(|_| {
+            let start = Instant::now();
+            let _session = open();
+            start.elapsed()
+        })
+        .min()
+        .expect("there is a sample")
+}
+
 fn the_warning_of(session: &mut Session) -> String {
     let tools = session.tools();
     let [warning] = &tools[..] else {
@@ -526,10 +552,9 @@ fn the_unavailable_servers_handshake_speaks_the_version_it_is_spoken_to_in() {
 fn with_a_binary_of_another_architecture_it_answers_the_handshake_in_milliseconds() {
     let plugin = PluginBox::with_a_binary_of_another_architecture();
 
-    let start = Instant::now();
-    let _session = Session::open(&plugin);
+    let handshake = the_handshake_at_its_fastest(|| Session::open(&plugin));
 
-    assert!(start.elapsed() < Duration::from_secs(2));
+    assert!(handshake < THE_HANDSHAKE_BUDGET, "{handshake:?}");
 }
 
 #[test]
@@ -610,10 +635,9 @@ fn on_a_machine_with_no_binary_the_handshake_is_answered_in_milliseconds() {
     let plugin = PluginBox::with_the_good_binary();
     let arm_linux = Machine::that_says_it_is("Linux", "aarch64");
 
-    let start = Instant::now();
-    let _session = Session::open_on(&plugin, &arm_linux);
+    let handshake = the_handshake_at_its_fastest(|| Session::open_on(&plugin, &arm_linux));
 
-    assert!(start.elapsed() < Duration::from_secs(2));
+    assert!(handshake < THE_HANDSHAKE_BUDGET, "{handshake:?}");
 }
 
 #[test]
@@ -700,10 +724,9 @@ fn on_linux_with_no_display_the_handshake_is_answered_in_milliseconds() {
     let plugin = PluginBox::with_a_stand_in_for(THE_LINUX_BINARY);
     let over_ssh = Machine::that_says_it_is("Linux", "x86_64").with_no_display();
 
-    let start = Instant::now();
-    let _session = Session::open_on(&plugin, &over_ssh);
+    let handshake = the_handshake_at_its_fastest(|| Session::open_on(&plugin, &over_ssh));
 
-    assert!(start.elapsed() < Duration::from_secs(2));
+    assert!(handshake < THE_HANDSHAKE_BUDGET, "{handshake:?}");
 }
 
 #[test]
